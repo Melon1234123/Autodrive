@@ -1,0 +1,50 @@
+#!/bin/zsh
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+RUN_DIR="$PROJECT_DIR/.run"
+
+BACKEND_PORT="${BACKEND_PORT:-8080}"
+FRONTEND_PORT="${FRONTEND_PORT:-5173}"
+
+stop_port_processes() {
+  local port="$1"
+  local label="$2"
+  local pids pid command
+
+  pids="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+  if [[ -z "$pids" ]]; then
+    return 0
+  fi
+
+  for pid in ${(f)pids}; do
+    command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    if [[ "$command" == *"server:app"* || "$command" == *"uvicorn"* || "$command" == *"vite"* || "$command" == *"Autodrive"* || "$command" == *"Python"* || "$command" == *"node"* ]]; then
+      echo "关闭 $label 端口 $port：PID $pid"
+      kill "$pid" >/dev/null 2>&1 || true
+    else
+      echo "跳过端口 $port 上的非 Autodrive 进程：PID $pid"
+    fi
+  done
+}
+
+echo "关闭 Autodrive 智驾 Demo..."
+
+mkdir -p "$RUN_DIR"
+
+stop_port_processes "$BACKEND_PORT" "后端"
+stop_port_processes "$FRONTEND_PORT" "前端"
+
+sleep 1
+
+if lsof -nP -iTCP:"$BACKEND_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "后端端口 $BACKEND_PORT 仍有进程监听。"
+else
+  echo "后端已关闭。"
+fi
+
+if lsof -nP -iTCP:"$FRONTEND_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "前端端口 $FRONTEND_PORT 仍有进程监听。"
+else
+  echo "前端已关闭。"
+fi

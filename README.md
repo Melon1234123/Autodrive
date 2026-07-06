@@ -4,6 +4,7 @@
 
 ## 文档
 
+- [GitHub 下载复现教程](docs/github-reproduction-guide.md)
 - [Windows 本地视频 + AI 诊断复现方案](docs/windows-local-ai-demo.md)
 - [nuScenes 公开数据复现指南](docs/nuscenes-data-guide.md)
 - [Foxglove + MCAP 实景演示指南](docs/foxglove-mcap-guide.md)

@@ -49,7 +49,8 @@ if [[ ! -x ".venv/bin/uvicorn" ]]; then
 fi
 
 if [[ -d "$DATASET_DIR/v1.0-mini" ]]; then
-  if [[ ! -f "$PROJECT_DIR/frontend/public/perception.json" ]] || \
+  if [[ ! -f "$PROJECT_DIR/frontend/public/sample.mp4" ]] || \
+    [[ ! -f "$PROJECT_DIR/frontend/public/perception.json" ]] || \
     ! grep -q '"frameMode": "continuous CAM_FRONT sample_data sweeps"' "$PROJECT_DIR/frontend/public/dataset-meta.json" 2>/dev/null || \
     ! grep -q '"sceneName": "scene-0796"' "$PROJECT_DIR/frontend/public/dataset-meta.json" 2>/dev/null || \
     ! grep -q '"cameraBox"' "$PROJECT_DIR/frontend/public/perception.json" 2>/dev/null; then
@@ -64,6 +65,11 @@ if [[ -d "$DATASET_DIR/v1.0-mini" ]]; then
       "$BACKEND_DIR/.venv/bin/python" "$PROJECT_DIR/scripts/export_foxglove_mcap.py" || true
     fi
   fi
+elif [[ ! -f "$PROJECT_DIR/frontend/public/sample.mp4" ]]; then
+  echo "未找到 nuScenes mini，也没有本地 sample.mp4。"
+  echo "前端仍会启动，但视频区域会缺少实景画面。"
+  echo "要完整复现本地实景 Demo，请下载 nuScenes mini 后运行："
+  echo "  NUSCENES_DATAROOT=/path/to/nuscenes-mini ./dakai"
 fi
 
 if is_listening "$BACKEND_PORT"; then

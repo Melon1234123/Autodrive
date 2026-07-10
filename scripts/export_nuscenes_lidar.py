@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export real nuScenes LIDAR_TOP keyframes for the cockpit's LiDAR viewer."""
+"""Export real nuScenes LIDAR_TOP frames for the cockpit's LiDAR viewer."""
 
 from __future__ import annotations
 
@@ -171,6 +171,7 @@ def export_lidar(
     max_range_m: float,
     voxel_m: float,
     max_scene_bytes: int,
+    include_sweeps: bool = False,
 ) -> tuple[int, int]:
     version_dir = find_version_dir(dataroot, version)
     scenes = load_json(version_dir / "scene.json")
@@ -183,6 +184,14 @@ def export_lidar(
     perception_frames = load_perception_frames(perception_path)
 
     lidar_keyframes: list[dict[str, Any]] = []
+    lidar_frames_by_token = {
+        str(row["token"]): row
+        for row in sample_data
+        if sensors_by_token.get(
+            calibrated_sensors_by_token.get(row.get("calibrated_sensor_token"), {}).get("sensor_token"), {}
+        ).get("channel")
+        == "LIDAR_TOP"
+    }
     lidar_samples_by_token = {
         str(row.get("sample_token")): row
         for row in sample_data
@@ -205,6 +214,29 @@ def export_lidar(
     if not lidar_keyframes:
         raise ValueError(f"Scene {scene_name!r} has no LIDAR_TOP keyframes")
 
+    lidar_source_frames = lidar_keyframes
+    if include_sweeps:
+        # sample_data prev/next links form one sensor stream and stop at a scene boundary.
+        # Start at the first scene keyframe, rewind to the first sweep, then walk forward.
+        first = lidar_keyframes[0]
+        token = str(first.get("token") or "")
+        while lidar_frames_by_token[token].get("prev"):
+            token = str(lidar_frames_by_token[token]["prev"])
+        lidar_source_frames = []
+        seen: set[str] = set()
+        while token:
+            if token in seen:
+                raise ValueError("LIDAR_TOP sample-data stream contains a cycle")
+            frame = lidar_frames_by_token.get(token)
+            if frame is None:
+                raise ValueError(f"LIDAR_TOP stream references missing sample data {token}")
+            seen.add(token)
+            source_path = dataroot / str(frame.get("filename") or "")
+            if not source_path.is_file():
+                raise FileNotFoundError(f"Required LIDAR_TOP source file is missing: {source_path}")
+            lidar_source_frames.append({"token": frame["token"], "timestamp": int(frame["timestamp"]), "source": source_path})
+            token = str(frame.get("next") or "")
+
     try:
         public_relative = output_dir.resolve().relative_to(manifest_path.parent.resolve())
     except ValueError as exc:
@@ -217,7 +249,7 @@ def export_lidar(
         frames_dir = temporary_dir / "frames"
         frames_dir.mkdir()
         exported: dict[str, tuple[str, int]] = {}
-        for lidar in lidar_keyframes:
+        for lidar in lidar_source_frames:
             points = np.fromfile(lidar["source"], dtype=POINT_DTYPE)
             reduced = crop_and_voxel_downsample(
                 ((float(point["x"]), float(point["y"]), float(point["z"]), float(point["intensity"])) for point in points),
@@ -232,7 +264,7 @@ def export_lidar(
 
         index_frames = []
         for perception in perception_frames:
-            lidar = nearest_lidar(lidar_keyframes, int(perception["timestampUs"]))
+            lidar = nearest_lidar(lidar_source_frames, int(perception["timestampUs"]))
             relative_file, point_count = exported[lidar["token"]]
             index_frames.append(
                 {
@@ -266,6 +298,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-range-m", type=float, default=60.0)
     parser.add_argument("--voxel-m", type=float, default=0.5)
     parser.add_argument("--max-scene-bytes", type=int, default=MAX_SCENE_BYTES)
+    parser.add_argument("--include-sweeps", action="store_true", help="Export real intervening LIDAR_TOP sweeps for higher playback cadence.")
     return parser.parse_args()
 
 
@@ -282,6 +315,7 @@ def main() -> None:
         max_range_m=args.max_range_m,
         voxel_m=args.voxel_m,
         max_scene_bytes=args.max_scene_bytes,
+        include_sweeps=args.include_sweeps,
     )
     print(f"[ok] exported {frame_count} timeline frames ({total_bytes / 1024 / 1024:.2f} MiB) to {args.output_dir.resolve()}")
 

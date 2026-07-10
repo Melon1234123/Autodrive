@@ -46,8 +46,8 @@ function makePointCloud(points: Float32Array, opacity: number) {
   const intensities = new Float32Array(count);
   for (let index = 0; index < count; index += 1) {
     const source = index * 4;
-    // Dataset coordinates are forward, left, up. Three's ground plane is X/Z.
-    positions[index * 3] = points[source + 1];
+    // nuScenes uses forward/left/up. Map left to screen-left and forward to screen-up.
+    positions[index * 3] = -points[source + 1];
     positions[index * 3 + 1] = points[source + 2] + 0.08;
     positions[index * 3 + 2] = points[source];
     intensities[index] = points[source + 3];
@@ -120,7 +120,7 @@ function addObjects(scene: THREE.Scene, objects: LidarPerceptionObject[]) {
     );
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.94 }));
     group.add(fill, edges);
-    group.position.set(object.y, Math.max(0, object.z) + height / 2, object.x);
+    group.position.set(-object.y, Math.max(0, object.z) + height / 2, object.x);
     group.rotation.y = -object.yaw;
     scene.add(group);
 
@@ -128,7 +128,7 @@ function addObjects(scene: THREE.Scene, objects: LidarPerceptionObject[]) {
     if (object.risk !== "low" || distance < 32) {
       const label = makeLabel(`${object.label}  ${Math.round(distance)}m`, `#${color.toString(16).padStart(6, "0")}`);
       if (label) {
-        label.position.set(object.y, height + 1.6, object.x);
+        label.position.set(-object.y, height + 1.6, object.x);
         scene.add(label);
       }
     }

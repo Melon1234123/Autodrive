@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "defaultSceneId": "default",
+  "scenes": [
+    {
+      "id": "default",
+      "label": "默认实景",
+      "description": "现有 nuScenes mini CAM_FRONT 演示场景。",
+      "videoFile": "/sample.mp4",
+      "telemetryFile": "/telemetry.json",
+      "perceptionFile": "/perception.json",
+      "metadataFile": "/dataset-meta.json",
+      "lidarIndexFile": "/scenes/default/lidar/index.json"
+    }
+  ]
+}

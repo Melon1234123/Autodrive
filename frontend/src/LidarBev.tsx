@@ -155,7 +155,7 @@ function BasicBevFallback({ frame }: Pick<LidarBevProps, "frame">) {
         <span
           className="lidar-bev-fallback-object"
           key={object.id}
-          style={{ left: `${50 + object.y * 1.25}%`, bottom: `${18 + object.x * .85}%` }}
+          style={{ left: `${50 - object.y * 1.25}%`, top: `${18 + object.x * .85}%` }}
         >
           {object.label}
         </span>
@@ -182,6 +182,7 @@ export function LidarBev({ pointCloud, frame, history, status, errorMessage }: L
 
     const scene = new THREE.Scene();
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, .1, 180);
+    camera.up.set(0, 0, -1);
     camera.position.set(0, 105, 30);
     camera.lookAt(0, 0, 30);
     addWorkbench(scene);

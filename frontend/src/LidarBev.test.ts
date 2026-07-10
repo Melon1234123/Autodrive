@@ -2,10 +2,23 @@
 import "@testing-library/jest-dom/vitest";
 import { createElement } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { LidarBev } from "./LidarBev";
 
-afterEach(cleanup);
+vi.mock("three", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("three")>();
+  return {
+    ...actual,
+    WebGLRenderer: vi.fn(() => {
+      throw new Error("WebGL unavailable");
+    }),
+  };
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("LidarBev", () => {
   it("shows a loading status while point cloud data is unavailable", () => {
@@ -34,5 +47,33 @@ describe("LidarBev", () => {
 
     expect(screen.getByText("LiDAR load failed: index HTTP 500")).toBeInTheDocument();
     expect(screen.queryByText("该场景未提供 LiDAR 点云")).not.toBeInTheDocument();
+  });
+
+  it("places fallback objects forward and left of the ego anchor when WebGL is unavailable", () => {
+    render(createElement(LidarBev, {
+      pointCloud: new Float32Array([0, 0, 0, 0]),
+      frame: {
+        time: 0,
+        objects: [{
+          id: "ahead-left",
+          label: "Ahead left",
+          category: "vehicle",
+          x: 10,
+          y: 4,
+          z: 0,
+          width: 2,
+          length: 4,
+          height: 1.5,
+          yaw: 0,
+          risk: "low",
+        }],
+      },
+      history: [],
+      status: "ready",
+    }));
+
+    const object = screen.getByText("Ahead left");
+    expect(parseFloat(object.style.top)).toBeGreaterThan(18);
+    expect(parseFloat(object.style.left)).toBeLessThan(50);
   });
 });

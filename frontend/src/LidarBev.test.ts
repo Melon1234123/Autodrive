@@ -73,7 +73,8 @@ describe("LidarBev", () => {
     }));
 
     const object = screen.getByText("Ahead left");
-    expect(parseFloat(object.style.top)).toBeGreaterThan(18);
+    const ego = screen.getByText("EGO");
+    expect(parseFloat(object.style.top)).toBeGreaterThan(parseFloat(ego.style.top));
     expect(parseFloat(object.style.left)).toBeLessThan(50);
   });
 });

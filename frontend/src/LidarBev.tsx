@@ -40,6 +40,7 @@ export type LidarBevProps = {
 };
 
 const VIEW = { front: 72, rear: 12, side: 32, range: 60 };
+const FALLBACK_EGO_TOP = 18;
 const objectColors: Record<RiskLevel, number> = {
   low: 0x62b7ae,
   medium: 0xf0b75c,
@@ -54,7 +55,7 @@ function makePointCloud(points: Float32Array, opacity: number, pose?: Omit<Lidar
   const intensities = new Float32Array(count);
   for (let index = 0; index < count; index += 1) {
     const source = index * 4;
-    // nuScenes uses forward/left/up. Map left to screen-left and forward to screen-up.
+    // nuScenes uses forward/left/up. Map left to screen-left and forward to screen-down.
     const forward = points[source];
     const left = points[source + 1];
     const heading = pose?.headingDelta ?? 0;
@@ -150,12 +151,12 @@ function BasicBevFallback({ frame }: Pick<LidarBevProps, "frame">) {
   return (
     <div className="lidar-bev-fallback" role="img" aria-label="基础检测框鸟瞰图">
       <div className="lidar-bev-fallback-grid" />
-      <span className="lidar-bev-fallback-ego">EGO</span>
+      <span className="lidar-bev-fallback-ego" style={{ top: `${FALLBACK_EGO_TOP}%` }}>EGO</span>
       {frame?.objects.slice(0, 10).map((object) => (
         <span
           className="lidar-bev-fallback-object"
           key={object.id}
-          style={{ left: `${50 - object.y * 1.25}%`, top: `${18 + object.x * .85}%` }}
+          style={{ left: `${50 - object.y * 1.25}%`, top: `${FALLBACK_EGO_TOP + object.x * .85}%` }}
         >
           {object.label}
         </span>

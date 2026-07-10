@@ -32,6 +32,7 @@ nuscenes-*/
 *.db3
 *.pcd
 *.bin
+!frontend/public/scenes/default/lidar/frames/*.bin
 frontend/public/*.mov
 frontend/public/*.mkv
 frontend/public/*.avi

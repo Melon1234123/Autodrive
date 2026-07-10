@@ -110,16 +110,54 @@ def load_perception_frames(path: Path) -> list[dict[str, Any]]:
     return frames
 
 
-def update_manifest(manifest_path: Path, scene_id: str, lidar_index_file: str) -> None:
+def updated_manifest_text(manifest_path: Path, scene_id: str, lidar_index_file: str) -> str:
     manifest = load_json(manifest_path)
     if not isinstance(manifest, dict) or not isinstance(manifest.get("scenes"), list):
         raise ValueError(f"Scene manifest must contain a scenes list: {manifest_path}")
     for scene in manifest["scenes"]:
         if scene.get("id") == scene_id:
             scene["lidarIndexFile"] = lidar_index_file
-            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            return
+            return json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
     raise ValueError(f"Scene id {scene_id!r} was not found in manifest {manifest_path}")
+
+
+def atomic_write_text(path: Path, content: str) -> None:
+    """Replace a text file without exposing a partially-written manifest."""
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent, text=True)
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as target:
+            target.write(content)
+        temporary_path.replace(path)
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
+def publish_output_and_manifest(
+    staged_output: Path, output_dir: Path, manifest_path: Path, manifest_text: str
+) -> None:
+    """Publish matching output and manifest, restoring the prior output on failure."""
+    previous_output: Path | None = None
+    try:
+        if output_dir.exists():
+            previous_output = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}-previous-", dir=output_dir.parent))
+            previous_output.rmdir()
+            output_dir.replace(previous_output)
+        staged_output.replace(output_dir)
+        try:
+            atomic_write_text(manifest_path, manifest_text)
+        except Exception:
+            shutil.rmtree(output_dir, ignore_errors=True)
+            if previous_output is not None:
+                previous_output.replace(output_dir)
+            raise
+        if previous_output is not None:
+            shutil.rmtree(previous_output)
+    except Exception:
+        if previous_output is not None and previous_output.exists() and not output_dir.exists():
+            previous_output.replace(output_dir)
+        raise
 
 
 def export_lidar(
@@ -145,18 +183,19 @@ def export_lidar(
     perception_frames = load_perception_frames(perception_path)
 
     lidar_keyframes: list[dict[str, Any]] = []
+    lidar_samples_by_token = {
+        str(row.get("sample_token")): row
+        for row in sample_data
+        if row.get("is_key_frame")
+        and sensors_by_token.get(
+            calibrated_sensors_by_token.get(row.get("calibrated_sensor_token"), {}).get("sensor_token"), {}
+        ).get("channel")
+        == "LIDAR_TOP"
+    }
     for sample in walk_scene_samples(scene, samples_by_token):
-        candidates = []
-        for sample_data_row in sample_data:
-            if sample_data_row.get("sample_token") != sample["token"] or not sample_data_row.get("is_key_frame"):
-                continue
-            calibration = calibrated_sensors_by_token.get(sample_data_row.get("calibrated_sensor_token"), {})
-            sensor = sensors_by_token.get(calibration.get("sensor_token"), {})
-            if sensor.get("channel") == "LIDAR_TOP":
-                candidates.append(sample_data_row)
-        if len(candidates) != 1:
+        lidar = lidar_samples_by_token.get(str(sample["token"]))
+        if lidar is None:
             raise ValueError(f"Sample {sample['token']} does not contain a LIDAR_TOP keyframe")
-        lidar = candidates[0]
         if lidar.get("ego_pose_token") not in ego_poses_by_token:
             raise ValueError(f"LIDAR_TOP sample data {lidar['token']} references a missing ego pose")
         source_path = dataroot / str(lidar.get("filename") or "")
@@ -191,10 +230,6 @@ def export_lidar(
             values.tofile(frames_dir / filename)
             exported[lidar["token"]] = (relative_file, len(reduced))
 
-        total_bytes = sum(path.stat().st_size for path in frames_dir.glob("*.bin"))
-        if total_bytes > max_scene_bytes:
-            raise ValueError(f"LiDAR export is {total_bytes} bytes, exceeding the {max_scene_bytes}-byte scene limit")
-
         index_frames = []
         for perception in perception_frames:
             lidar = nearest_lidar(lidar_keyframes, int(perception["timestampUs"]))
@@ -208,10 +243,11 @@ def export_lidar(
                 }
             )
         write_lidar_index(temporary_dir, index_frames)
-        if output_dir.exists():
-            shutil.rmtree(output_dir)
-        temporary_dir.replace(output_dir)
-        update_manifest(manifest_path, scene_id, lidar_index_file)
+        total_bytes = sum(path.stat().st_size for path in temporary_dir.rglob("*") if path.is_file())
+        if total_bytes > max_scene_bytes:
+            raise ValueError(f"LiDAR export is {total_bytes} bytes, exceeding the {max_scene_bytes}-byte scene limit")
+        manifest_text = updated_manifest_text(manifest_path, scene_id, lidar_index_file)
+        publish_output_and_manifest(temporary_dir, output_dir, manifest_path, manifest_text)
         return len(index_frames), total_bytes
     except Exception:
         shutil.rmtree(temporary_dir, ignore_errors=True)

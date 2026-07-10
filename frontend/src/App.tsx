@@ -6,6 +6,7 @@ import type { RiskEvent } from "./risk-events";
 import { LidarBev, type LidarHistoryCloud } from "./LidarBev";
 import { findNearestLidarFrame, LidarFrameCache, loadLidarIndex } from "./lidar";
 import type { LidarIndex } from "./lidar";
+import { forwardToScreenDown, verticalVisibleBounds } from "./bev-orientation";
 import {
   Activity,
   AlertTriangle,
@@ -524,13 +525,14 @@ function useMapCanvas(
     const scale = Math.min(panel.width / (view.side * 2), panel.height / (view.front + view.rear)) * viewport.zoom;
     const egoCanvas = {
       x: panel.x + panel.width / 2 + viewport.offsetX,
-      y: panel.y + panel.height - view.rear * scale + viewport.offsetY,
+      y: panel.y + view.rear * scale + viewport.offsetY,
     };
+    const verticalBounds = verticalVisibleBounds(panel.y, panel.y + panel.height, egoCanvas.y, scale);
     const visibleBounds = {
       minLeft: (panel.x - egoCanvas.x) / scale,
       maxLeft: (panel.x + panel.width - egoCanvas.x) / scale,
-      minForward: (egoCanvas.y - (panel.y + panel.height)) / scale,
-      maxForward: (egoCanvas.y - panel.y) / scale,
+      minForward: verticalBounds.minForward,
+      maxForward: verticalBounds.maxForward,
     };
     const toEgo = (frame: PerceptionFrame) => {
       const dx = frame.ego.x - current.ego.x;
@@ -545,7 +547,7 @@ function useMapCanvas(
       const lateralScale = 1.12 - depth * .58;
       return {
         x: egoCanvas.x + left * scale * lateralScale,
-        y: egoCanvas.y - forward * scale * (.76 + depth * .24),
+        y: forwardToScreenDown(forward, egoCanvas.y, scale, .76 + depth * .24),
       };
     };
     const pointToCanvas = (point: { forward: number; left: number }) => toCanvas(point.forward, point.left);

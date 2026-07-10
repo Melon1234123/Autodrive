@@ -3,7 +3,7 @@ import type { PointerEvent, WheelEvent } from "react";
 import { RiskEventsPanel } from "./RiskEventsPanel";
 import { deriveRiskEvents } from "./risk-events";
 import type { RiskEvent } from "./risk-events";
-import { LidarBev } from "./LidarBev";
+import { LidarBev, type LidarHistoryCloud } from "./LidarBev";
 import { findNearestLidarFrame, LidarFrameCache, loadLidarIndex } from "./lidar";
 import type { LidarIndex } from "./lidar";
 import {
@@ -483,7 +483,6 @@ function useMapCanvas(
   currentFrame: PerceptionFrame | null,
   canvasRef: React.RefObject<HTMLCanvasElement | null>,
   viewport: MapViewport,
-  highlightedRiskEvent: RiskEvent | null,
 ) {
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -572,32 +571,6 @@ function useMapCanvas(
     localBackground.addColorStop(1, "rgba(8, 16, 31, 1)");
     ctx.fillStyle = localBackground;
     ctx.fillRect(panel.x, panel.y, panel.width, panel.height);
-
-    ctx.strokeStyle = "rgba(72, 112, 165, 0.16)";
-    ctx.lineWidth = 1;
-    const lateralStart = Math.floor(visibleBounds.minLeft / 5) * 5;
-    const lateralEnd = Math.ceil(visibleBounds.maxLeft / 5) * 5;
-    for (let lateral = lateralStart; lateral <= lateralEnd; lateral += 5) {
-      const x = egoCanvas.x + lateral * scale;
-      ctx.beginPath();
-      ctx.moveTo(x, panel.y);
-      ctx.lineTo(x, panel.y + panel.height);
-      ctx.stroke();
-    }
-    const forwardStart = Math.ceil(visibleBounds.minForward / 10) * 10;
-    const forwardEnd = Math.floor(visibleBounds.maxForward / 10) * 10;
-    for (let forward = forwardStart; forward <= forwardEnd; forward += 10) {
-      const y = egoCanvas.y - forward * scale;
-      ctx.beginPath();
-      ctx.moveTo(panel.x, y);
-      ctx.lineTo(panel.x + panel.width, y);
-      ctx.stroke();
-      ctx.fillStyle = "rgba(154, 182, 222, 0.56)";
-      ctx.font = "11px Inter, sans-serif";
-      if (forward > 0 && y > panel.y + 12 && y < panel.y + panel.height - 8) {
-        ctx.fillText(`${forward}m`, panel.x + panel.width - 42, y - 5);
-      }
-    }
 
     type EgoPoint = { forward: number; left: number };
     const drawPolyline = (points: EgoPoint[], color: string, width: number, glow = 0, dash: number[] = []) => {
@@ -768,58 +741,8 @@ function useMapCanvas(
 
     drawEgoCar(ctx, egoCanvas.x, egoCanvas.y - 4, 1.1, 1, "white");
 
-    ctx.save();
-    ctx.fillStyle = "rgba(32, 68, 63, 0.88)";
-    ctx.font = "12px Inter, sans-serif";
-    ctx.fillText("局部道路跟随 / 车头朝上", panel.x + 12, panel.y + 22);
-    ctx.fillStyle = "rgba(62, 104, 97, 0.72)";
-    ctx.fillText(`前方 ${Math.max(0, Math.round(visibleBounds.maxForward))}m`, panel.x + panel.width - 72, panel.y + 22);
     ctx.restore();
-    ctx.restore();
-
-    // Persistent scene overview: the complete path remains visible as the ego car advances.
-    const overview = { x: panel.x + 12, y: panel.y + 34, width: Math.min(150, panel.width * .36), height: Math.min(108, panel.height * .34) };
-    const xs = frames.map((item) => item.ego.x);
-    const ys = frames.map((item) => item.ego.y);
-    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-    const range = Math.max(maxX - minX, maxY - minY, 1);
-    const overviewPoint = (item: PerceptionFrame) => ({
-      x: overview.x + 10 + ((item.ego.x - minX) / range) * (overview.width - 20),
-      y: overview.y + overview.height - 10 - ((item.ego.y - minY) / range) * (overview.height - 20),
-    });
-    ctx.save();
-    ctx.fillStyle = "rgba(7, 17, 33, .90)";
-    ctx.strokeStyle = "rgba(78, 125, 185, .55)";
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.roundRect(overview.x, overview.y, overview.width, overview.height, 7); ctx.fill(); ctx.stroke();
-    ctx.font = "10px Inter, sans-serif";
-    ctx.fillStyle = "rgba(202, 220, 246, .82)";
-    ctx.fillText("SCENE TRAIL · PERSISTENT", overview.x + 9, overview.y + 15);
-    ctx.beginPath();
-    frames.forEach((item, index) => {
-      const p = overviewPoint(item);
-      if (index === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
-    });
-    ctx.strokeStyle = "rgba(0, 207, 169, .55)"; ctx.lineWidth = 2.2; ctx.stroke();
-    if (highlightedRiskEvent) {
-      const riskSegment = frames.filter((item) => item.time >= highlightedRiskEvent.startTime && item.time <= highlightedRiskEvent.endTime);
-      if (riskSegment.length > 0) {
-        ctx.beginPath();
-        riskSegment.forEach((item, index) => {
-          const point = overviewPoint(item);
-          if (index === 0) ctx.moveTo(point.x, point.y); else ctx.lineTo(point.x, point.y);
-        });
-        ctx.strokeStyle = highlightedRiskEvent.risk === "high" ? "#f05a91" : "#d9a83d";
-        ctx.lineWidth = 4; ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 9; ctx.stroke();
-      }
-    }
-    const traveled = frames.slice(0, currentIndex + 1);
-    ctx.beginPath(); traveled.forEach((item, index) => { const p = overviewPoint(item); if (index === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
-    ctx.strokeStyle = "#0575f5"; ctx.lineWidth = 2.8; ctx.shadowColor = "#0575f5"; ctx.shadowBlur = 8; ctx.stroke();
-    const marker = overviewPoint(current);
-    ctx.fillStyle = "#ffffff"; ctx.strokeStyle = "#7596c8"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(marker.x, marker.y, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    ctx.restore();
-  }, [canvasRef, currentFrame, frames, highlightedRiskEvent, viewport]);
+  }, [canvasRef, currentFrame, frames, viewport]);
 }
 
 function ProjectSite({ onOpenDemo }: { onOpenDemo: () => void }) {
@@ -890,8 +813,7 @@ function App() {
   const [lidarError, setLidarError] = useState<string | null>(null);
   const [lidarCache] = useState(() => new LidarFrameCache());
   const [currentPointCloud, setCurrentPointCloud] = useState<Float32Array | null>(null);
-  const [lidarHistory, setLidarHistory] = useState<Float32Array[]>([]);
-  const [selectedRiskEventId, setSelectedRiskEventId] = useState<string | null>(null);
+  const [lidarHistory, setLidarHistory] = useState<LidarHistoryCloud[]>([]);
 
   const currentFrame = useMemo(() => findNearestFrame(telemetry, currentTime), [telemetry, currentTime]);
   const currentPerception = useMemo(() => findNearestFrame(perception, currentTime), [perception, currentTime]);
@@ -923,18 +845,12 @@ function App() {
     () => riskEvents.filter((event) => event.endTime <= currentTime + 0.05),
     [currentTime, riskEvents],
   );
-  const highlightedRiskEvent = useMemo(
-    () => riskEvents.find((event) => event.id === selectedRiskEventId)
-      ?? riskEvents.find((event) => currentTime >= event.startTime && currentTime <= event.endTime)
-      ?? null,
-    [currentTime, riskEvents, selectedRiskEventId],
-  );
   const currentLidarFrame = useMemo(
     () => lidarIndex ? findNearestLidarFrame(lidarIndex, currentTime) : null,
     [currentTime, lidarIndex],
   );
 
-  useMapCanvas(perception, currentPerception, mapCanvasRef, mapViewport, highlightedRiskEvent);
+  useMapCanvas(perception, currentPerception, mapCanvasRef, mapViewport);
 
   const updateMapZoom = useCallback((factor: number) => {
     setMapViewport((viewport) => ({ ...viewport, zoom: clampMapZoom(viewport.zoom * factor) }));
@@ -1051,7 +967,6 @@ function App() {
     setDiagnosis(null);
     setError(null);
     setCurrentTime(0);
-    setSelectedRiskEventId(null);
     lidarCache.clear();
     setLidarIndex(null);
     setCurrentPointCloud(null);
@@ -1132,7 +1047,23 @@ function App() {
       .then((clouds) => {
         if (controller.signal.aborted) return;
         setCurrentPointCloud(clouds.at(-1) ?? null);
-        setLidarHistory(clouds.slice(0, -1));
+        const currentPose = findNearestFrame(perception, current.time)?.ego;
+        const history = clouds.slice(0, -1).flatMap((points, index): LidarHistoryCloud[] => {
+          const source = frames[index];
+          const sourcePose = findNearestFrame(perception, source.time)?.ego;
+          if (!currentPose || !sourcePose) return [];
+          const dx = sourcePose.x - currentPose.x;
+          const dy = sourcePose.y - currentPose.y;
+          const cos = Math.cos(currentPose.yaw);
+          const sin = Math.sin(currentPose.yaw);
+          return [{
+            points,
+            forward: cos * dx + sin * dy,
+            left: -sin * dx + cos * dy,
+            headingDelta: sourcePose.yaw - currentPose.yaw,
+          }];
+        });
+        setLidarHistory(history);
         setLidarStatus("ready");
       })
       .catch((loadError: unknown) => {
@@ -1240,7 +1171,6 @@ function App() {
       void video.play().catch(() => undefined);
     }
     setCurrentTime(replayTime);
-    setSelectedRiskEventId(event?.id ?? null);
   };
 
   const metricItems = [

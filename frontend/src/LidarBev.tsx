@@ -22,11 +22,19 @@ export type LidarPerceptionFrame = {
   objects: LidarPerceptionObject[];
 };
 
+export type LidarHistoryCloud = {
+  points: Float32Array;
+  /** Earlier sensor pose expressed in the current ego frame. */
+  forward: number;
+  left: number;
+  headingDelta: number;
+};
+
 export type LidarBevProps = {
   pointCloud: Float32Array | null;
   frame: LidarPerceptionFrame | null;
-  /** Up to two earlier decoded frames. The caller owns temporal alignment. */
-  history: Float32Array[];
+  /** Up to two earlier clouds transformed into the current ego frame. */
+  history: LidarHistoryCloud[];
   status: "loading" | "unavailable" | "ready" | "error";
   errorMessage?: string | null;
 };
@@ -39,7 +47,7 @@ const objectColors: Record<RiskLevel, number> = {
   unknown: 0x9aa6a8,
 };
 
-function makePointCloud(points: Float32Array, opacity: number) {
+function makePointCloud(points: Float32Array, opacity: number, pose?: Omit<LidarHistoryCloud, "points">) {
   const geometry = new THREE.BufferGeometry();
   const count = Math.floor(points.length / 4);
   const positions = new Float32Array(count * 3);
@@ -47,9 +55,14 @@ function makePointCloud(points: Float32Array, opacity: number) {
   for (let index = 0; index < count; index += 1) {
     const source = index * 4;
     // nuScenes uses forward/left/up. Map left to screen-left and forward to screen-up.
-    positions[index * 3] = -points[source + 1];
+    const forward = points[source];
+    const left = points[source + 1];
+    const heading = pose?.headingDelta ?? 0;
+    const worldForward = (pose?.forward ?? 0) + Math.cos(heading) * forward - Math.sin(heading) * left;
+    const worldLeft = (pose?.left ?? 0) + Math.sin(heading) * forward + Math.cos(heading) * left;
+    positions[index * 3] = -worldLeft;
     positions[index * 3 + 1] = points[source + 2] + 0.08;
-    positions[index * 3 + 2] = points[source];
+    positions[index * 3 + 2] = worldForward;
     intensities[index] = points[source + 3];
   }
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
@@ -85,29 +98,6 @@ function makePointCloud(points: Float32Array, opacity: number) {
   return new THREE.Points(geometry, material);
 }
 
-function makeLabel(text: string, color: string) {
-  const canvas = document.createElement("canvas");
-  const context = canvas.getContext("2d");
-  if (!context) return null;
-  context.font = "600 24px Inter, PingFang SC, sans-serif";
-  const width = Math.ceil(context.measureText(text).width + 24);
-  canvas.width = width;
-  canvas.height = 38;
-  context.font = "600 24px Inter, PingFang SC, sans-serif";
-  context.fillStyle = "rgba(6, 18, 20, .78)";
-  context.fillRect(0, 0, width, canvas.height);
-  context.strokeStyle = color;
-  context.lineWidth = 1.5;
-  context.strokeRect(.75, .75, width - 1.5, canvas.height - 1.5);
-  context.fillStyle = "#efffff";
-  context.fillText(text, 12, 26);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
-  sprite.scale.set(width / 20, 1.9, 1);
-  return sprite;
-}
-
 function addObjects(scene: THREE.Scene, objects: LidarPerceptionObject[]) {
   objects.forEach((object) => {
     const color = objectColors[object.risk] ?? objectColors.unknown;
@@ -124,41 +114,11 @@ function addObjects(scene: THREE.Scene, objects: LidarPerceptionObject[]) {
     group.rotation.y = -object.yaw;
     scene.add(group);
 
-    const distance = Math.hypot(object.x, object.y);
-    if (object.risk !== "low" || distance < 32) {
-      const label = makeLabel(`${object.label}  ${Math.round(distance)}m`, `#${color.toString(16).padStart(6, "0")}`);
-      if (label) {
-        label.position.set(-object.y, height + 1.6, object.x);
-        scene.add(label);
-      }
-    }
   });
 }
 
 function addWorkbench(scene: THREE.Scene) {
   scene.background = new THREE.Color(0x071113);
-  const grid = new THREE.GridHelper(80, 8, 0x31565a, 0x183438);
-  grid.position.set(0, 0, 30);
-  scene.add(grid);
-
-  const ringPoints = Array.from({ length: 97 }, (_, index) => {
-    const angle = (index / 96) * Math.PI * 2;
-    return new THREE.Vector3(Math.cos(angle) * VIEW.range, 0.04, Math.sin(angle) * VIEW.range);
-  });
-  const ring = new THREE.Line(new THREE.BufferGeometry().setFromPoints(ringPoints), new THREE.LineDashedMaterial({ color: 0x467c78, dashSize: 1.6, gapSize: 1.2, transparent: true, opacity: .7 }));
-  ring.computeLineDistances();
-  scene.add(ring);
-
-  const axes = new THREE.AxesHelper(8);
-  axes.position.y = .08;
-  scene.add(axes);
-  [10, 20, 30, 40, 50, 60, 70].forEach((meters) => {
-    const label = makeLabel(`${meters}m`, "#5d8985");
-    if (label) {
-      label.position.set(-VIEW.side + 2, .15, meters);
-      scene.add(label);
-    }
-  });
 }
 
 function addEgo(scene: THREE.Scene) {
@@ -225,7 +185,7 @@ export function LidarBev({ pointCloud, frame, history, status, errorMessage }: L
     camera.position.set(0, 105, 30);
     camera.lookAt(0, 0, 30);
     addWorkbench(scene);
-    history.slice(-2).forEach((points, index) => scene.add(makePointCloud(points, .12 + index * .1)));
+    history.slice(-2).forEach((cloud, index) => scene.add(makePointCloud(cloud.points, .12 + index * .1, cloud)));
     scene.add(makePointCloud(pointCloud, .9));
     if (frame) addObjects(scene, frame.objects);
     addEgo(scene);
@@ -266,8 +226,6 @@ export function LidarBev({ pointCloud, frame, history, status, errorMessage }: L
       {webglUnavailable && pointCloud ? <BasicBevFallback frame={frame} /> : pointCloud && <canvas ref={canvasRef} className="lidar-bev-canvas" data-testid="lidar-webgl-canvas" />}
       {(!pointCloud || status !== "ready") && <div className="lidar-bev-state lidar-bev-overlay">{message}</div>}
       <span className="lidar-bev-source">LiDAR · 原始点云</span>
-      <span className="lidar-bev-axis lidar-bev-axis-x">横向 / m</span>
-      <span className="lidar-bev-axis lidar-bev-axis-z">前向 / m</span>
       {webglUnavailable && pointCloud && <p className="lidar-bev-warning">WebGL 不可用，已切换到基础检测框视图</p>}
     </div>
   );

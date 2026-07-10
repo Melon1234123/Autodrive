@@ -12,6 +12,8 @@ describe("LidarBev", () => {
     render(createElement(LidarBev, { pointCloud: null, frame: null, history: [], status: "loading" }));
 
     expect(screen.getByText("LiDAR 点云加载中")).toBeInTheDocument();
+    expect(screen.queryByText("横向 / m")).not.toBeInTheDocument();
+    expect(screen.queryByText("前向 / m")).not.toBeInTheDocument();
   });
 
   it("shows an explicit unavailable state without fabricated points", () => {

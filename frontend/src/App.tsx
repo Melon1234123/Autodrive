@@ -246,36 +246,37 @@ function deriveFrameRisk(frame: TelemetryFrame | null, perception: PerceptionFra
   return "low";
 }
 
-function drawEgoCar(ctx: CanvasRenderingContext2D, x: number, y: number, size = 1, alpha = 1) {
+function drawEgoCar(ctx: CanvasRenderingContext2D, x: number, y: number, size = 1, alpha = 1, variant: "pink" | "white" = "pink") {
   ctx.save();
   ctx.translate(x, y);
   ctx.globalAlpha = alpha;
-  ctx.shadowColor = "rgba(255, 53, 123, .72)";
+  const whiteCar = variant === "white";
+  ctx.shadowColor = whiteCar ? "rgba(1, 8, 22, .92)" : "rgba(255, 53, 123, .72)";
   ctx.shadowBlur = 18 * size;
   const body = ctx.createLinearGradient(0, -18 * size, 0, 18 * size);
-  body.addColorStop(0, "#ff7ba9");
-  body.addColorStop(.45, "#f34886");
-  body.addColorStop(1, "#c91f60");
+  body.addColorStop(0, whiteCar ? "#ffffff" : "#ff7ba9");
+  body.addColorStop(.45, whiteCar ? "#dce4ed" : "#f34886");
+  body.addColorStop(1, whiteCar ? "#aebbc9" : "#c91f60");
   ctx.fillStyle = body;
-  ctx.strokeStyle = "#ffd5e4";
+  ctx.strokeStyle = whiteCar ? "#70839c" : "#ffd5e4";
   ctx.lineWidth = 1.4 * size;
   ctx.beginPath();
   ctx.roundRect(-8 * size, -17 * size, 16 * size, 34 * size, 5 * size);
   ctx.fill();
   ctx.stroke();
   ctx.shadowBlur = 0;
-  ctx.fillStyle = "#5f183b";
+  ctx.fillStyle = whiteCar ? "#1d293a" : "#5f183b";
   ctx.beginPath();
   ctx.roundRect(-5.2 * size, -9.5 * size, 10.4 * size, 13 * size, 3 * size);
   ctx.fill();
   ctx.fillStyle = "rgba(255,255,255,.68)";
   ctx.fillRect(-4.1 * size, -8.1 * size, 8.2 * size, 1.6 * size);
-  ctx.fillStyle = "#311126";
+  ctx.fillStyle = whiteCar ? "#101721" : "#311126";
   [-1, 1].forEach((side) => {
     ctx.beginPath(); ctx.roundRect(side * 8 * size - (side > 0 ? 0 : 2 * size), -11 * size, 2 * size, 7 * size, 1 * size); ctx.fill();
     ctx.beginPath(); ctx.roundRect(side * 8 * size - (side > 0 ? 0 : 2 * size), 5 * size, 2 * size, 7 * size, 1 * size); ctx.fill();
   });
-  ctx.fillStyle = "#ffe2ec";
+  ctx.fillStyle = whiteCar ? "#ffffff" : "#ffe2ec";
   ctx.fillRect(-5.2 * size, -15.1 * size, 10.4 * size, 2.1 * size);
   ctx.restore();
 }
@@ -505,8 +506,8 @@ function useMapCanvas(
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssWidth, cssHeight);
     const mapBackground = ctx.createLinearGradient(0, 0, cssWidth, cssHeight);
-    mapBackground.addColorStop(0, "#f8fcf8");
-    mapBackground.addColorStop(1, "#e5efe8");
+    mapBackground.addColorStop(0, "#17243a");
+    mapBackground.addColorStop(1, "#0d1729");
     ctx.fillStyle = mapBackground;
     ctx.fillRect(0, 0, cssWidth, cssHeight);
 
@@ -551,8 +552,8 @@ function useMapCanvas(
     const pointToCanvas = (point: { forward: number; left: number }) => toCanvas(point.forward, point.left);
 
     ctx.save();
-    ctx.fillStyle = "rgba(251, 253, 250, 0.94)";
-    ctx.strokeStyle = "rgba(83, 125, 118, 0.22)";
+    ctx.fillStyle = "rgba(12, 23, 41, 0.98)";
+    ctx.strokeStyle = "rgba(64, 106, 160, 0.55)";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.roundRect(panel.x, panel.y, panel.width, panel.height, 6);
@@ -566,13 +567,13 @@ function useMapCanvas(
     ctx.clip();
 
     const localBackground = ctx.createLinearGradient(0, panel.y, 0, panel.y + panel.height);
-    localBackground.addColorStop(0, "rgba(244, 249, 245, 0.98)");
-    localBackground.addColorStop(0.48, "rgba(233, 242, 236, 0.99)");
-    localBackground.addColorStop(1, "rgba(220, 233, 225, 1)");
+    localBackground.addColorStop(0, "rgba(22, 34, 56, 1)");
+    localBackground.addColorStop(0.48, "rgba(14, 24, 43, 1)");
+    localBackground.addColorStop(1, "rgba(8, 16, 31, 1)");
     ctx.fillStyle = localBackground;
     ctx.fillRect(panel.x, panel.y, panel.width, panel.height);
 
-    ctx.strokeStyle = "rgba(70, 112, 105, 0.10)";
+    ctx.strokeStyle = "rgba(72, 112, 165, 0.16)";
     ctx.lineWidth = 1;
     const lateralStart = Math.floor(visibleBounds.minLeft / 5) * 5;
     const lateralEnd = Math.ceil(visibleBounds.maxLeft / 5) * 5;
@@ -591,7 +592,7 @@ function useMapCanvas(
       ctx.moveTo(panel.x, y);
       ctx.lineTo(panel.x + panel.width, y);
       ctx.stroke();
-      ctx.fillStyle = "rgba(78, 119, 111, 0.30)";
+      ctx.fillStyle = "rgba(154, 182, 222, 0.56)";
       ctx.font = "11px Inter, sans-serif";
       if (forward > 0 && y > panel.y + 12 && y < panel.y + panel.height - 8) {
         ctx.fillText(`${forward}m`, panel.x + panel.width - 42, y - 5);
@@ -696,26 +697,26 @@ function useMapCanvas(
     };
 
     const roadFill = ctx.createLinearGradient(0, panel.y, 0, panel.y + panel.height);
-    roadFill.addColorStop(0, "rgba(211, 222, 214, 0.97)");
-    roadFill.addColorStop(0.55, "rgba(192, 207, 197, 0.98)");
-    roadFill.addColorStop(1, "rgba(178, 195, 184, 1)");
+    roadFill.addColorStop(0, "rgba(19, 33, 56, 1)");
+    roadFill.addColorStop(0.55, "rgba(12, 24, 43, 1)");
+    roadFill.addColorStop(1, "rgba(6, 16, 31, 1)");
     const shoulderFill = ctx.createLinearGradient(0, panel.y, 0, panel.y + panel.height);
-    shoulderFill.addColorStop(0, "rgba(157, 190, 171, 0.42)");
-    shoulderFill.addColorStop(1, "rgba(137, 173, 152, 0.30)");
+    shoulderFill.addColorStop(0, "rgba(36, 59, 94, 0.92)");
+    shoulderFill.addColorStop(1, "rgba(23, 42, 72, 0.86)");
     // Raised sand-table road layers: offset shadows create a tangible roadbed.
     const roadShadow = localRoute.map((point) => ({ forward: point.forward - .85, left: point.left }));
-    drawRoadStrip(roadShadow, 11.2, "rgba(107, 139, 121, .16)", "rgba(82, 114, 99, .16)", 4);
-    drawRoadStrip(localRoute, 10.4, shoulderFill, "rgba(73, 122, 111, 0.18)");
-    const laneEdges = drawRoadStrip(localRoute, 6.3, roadFill, "rgba(75, 111, 102, 0.22)", 3);
-    drawPolyline(laneEdges.leftEdge, "rgba(255, 255, 251, 0.76)", 1.4);
-    drawPolyline(laneEdges.rightEdge, "rgba(255, 255, 251, 0.76)", 1.4);
+    drawRoadStrip(roadShadow, 11.2, "rgba(3, 9, 19, .55)", "rgba(66, 105, 158, .35)", 4);
+    drawRoadStrip(localRoute, 10.4, shoulderFill, "rgba(74, 121, 183, 0.55)");
+    const laneEdges = drawRoadStrip(localRoute, 6.3, roadFill, "rgba(66, 112, 174, 0.7)", 3);
+    drawPolyline(laneEdges.leftEdge, "rgba(230, 239, 255, 0.78)", 1.4);
+    drawPolyline(laneEdges.rightEdge, "rgba(230, 239, 255, 0.78)", 1.4);
 
     for (let marker = Math.max(10, Math.ceil(visibleBounds.minForward / 10) * 10); marker <= visibleBounds.maxForward; marker += 10) {
       const routePoint = localRoute.reduce((nearest, point) => (Math.abs(point.forward - marker) < Math.abs(nearest.forward - marker) ? point : nearest), localRoute[0]);
       const y = pointToCanvas(routePoint).y;
       if (y > panel.y + 8 && y < panel.y + panel.height - 8) {
         ctx.save();
-        ctx.strokeStyle = "rgba(255, 255, 251, 0.74)";
+        ctx.strokeStyle = "rgba(232, 240, 255, 0.75)";
         ctx.lineWidth = 1;
         ctx.setLineDash([3, 7]);
         ctx.beginPath();
@@ -728,10 +729,11 @@ function useMapCanvas(
 
     const pastRoute = localRoute.filter((point) => point.forward <= 0.8);
     const futureRoute = localRoute.filter((point) => point.forward >= -0.4);
-    drawPolyline(pastRoute, "rgba(82, 122, 115, 0.25)", 7);
-    drawPolyline(futureRoute, "rgba(105, 160, 149, 0.19)", 11, 4);
-    drawPolyline(futureRoute, "#4e9388", 3.2, 6);
-    drawPolyline(futureRoute, "rgba(250, 255, 248, 0.84)", 1.1, 0, [10, 13]);
+    drawPolyline(pastRoute, "rgba(8, 105, 244, 0.85)", 10, 8);
+    drawPolyline(pastRoute, "#0575f5", 5.4, 10);
+    drawPolyline(futureRoute, "rgba(0, 238, 187, 0.24)", 14, 10);
+    drawPolyline(futureRoute, "#00cfa9", 7.2, 15);
+    drawPolyline(futureRoute, "rgba(137, 255, 231, 0.92)", 1.2, 0, [10, 13]);
 
     current.objects.forEach((object) => {
       if (
@@ -761,7 +763,7 @@ function useMapCanvas(
       ctx.restore();
     });
 
-    drawEgoCar(ctx, egoCanvas.x, egoCanvas.y - 4, 1.1);
+    drawEgoCar(ctx, egoCanvas.x, egoCanvas.y - 4, 1.1, 1, "white");
 
     ctx.save();
     ctx.fillStyle = "rgba(32, 68, 63, 0.88)";
@@ -783,19 +785,19 @@ function useMapCanvas(
       y: overview.y + overview.height - 10 - ((item.ego.y - minY) / range) * (overview.height - 20),
     });
     ctx.save();
-    ctx.fillStyle = "rgba(249, 252, 249, .86)";
-    ctx.strokeStyle = "rgba(111, 151, 139, .30)";
+    ctx.fillStyle = "rgba(7, 17, 33, .90)";
+    ctx.strokeStyle = "rgba(78, 125, 185, .55)";
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.roundRect(overview.x, overview.y, overview.width, overview.height, 7); ctx.fill(); ctx.stroke();
     ctx.font = "10px Inter, sans-serif";
-    ctx.fillStyle = "rgba(48, 85, 78, .78)";
+    ctx.fillStyle = "rgba(202, 220, 246, .82)";
     ctx.fillText("SCENE TRAIL · PERSISTENT", overview.x + 9, overview.y + 15);
     ctx.beginPath();
     frames.forEach((item, index) => {
       const p = overviewPoint(item);
       if (index === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
     });
-    ctx.strokeStyle = "rgba(78, 147, 136, .45)"; ctx.lineWidth = 2.2; ctx.stroke();
+    ctx.strokeStyle = "rgba(0, 207, 169, .55)"; ctx.lineWidth = 2.2; ctx.stroke();
     if (highlightedRiskEvent) {
       const riskSegment = frames.filter((item) => item.time >= highlightedRiskEvent.startTime && item.time <= highlightedRiskEvent.endTime);
       if (riskSegment.length > 0) {
@@ -810,9 +812,9 @@ function useMapCanvas(
     }
     const traveled = frames.slice(0, currentIndex + 1);
     ctx.beginPath(); traveled.forEach((item, index) => { const p = overviewPoint(item); if (index === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
-    ctx.strokeStyle = "#f05a91"; ctx.lineWidth = 2.8; ctx.shadowColor = "#f05a91"; ctx.shadowBlur = 8; ctx.stroke();
+    ctx.strokeStyle = "#0575f5"; ctx.lineWidth = 2.8; ctx.shadowColor = "#0575f5"; ctx.shadowBlur = 8; ctx.stroke();
     const marker = overviewPoint(current);
-    ctx.fillStyle = "#f05a91"; ctx.beginPath(); ctx.arc(marker.x, marker.y, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#ffffff"; ctx.strokeStyle = "#7596c8"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(marker.x, marker.y, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     ctx.restore();
   }, [canvasRef, currentFrame, frames, highlightedRiskEvent, viewport]);
 }
@@ -1118,7 +1120,11 @@ function App() {
     const controller = new AbortController();
     const currentIndex = lidarIndex.frames.indexOf(current);
     const frames = lidarIndex.frames.slice(Math.max(0, currentIndex - 2), currentIndex + 1);
-    setLidarStatus("loading");
+    // Keep the last successful point cloud visible while the next keyframe is fetched.
+    // Switching to the loading branch here used to unmount the WebGL canvas every 100 ms.
+    if (!currentPointCloud) {
+      setLidarStatus("loading");
+    }
     Promise.all(frames.map((frame) => lidarCache.load(resolveLidarFrameUrl(lidarSource, frame.file), controller.signal)))
       .then((clouds) => {
         if (controller.signal.aborted) return;

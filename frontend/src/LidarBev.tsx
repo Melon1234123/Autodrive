@@ -255,25 +255,20 @@ export function LidarBev({ pointCloud, frame, history, status, errorMessage }: L
     };
   }, [frame, history, pointCloud, webglUnavailable]);
 
-  if (status === "loading") return <div className="lidar-bev-state">LiDAR 点云加载中</div>;
-  if (status === "error") {
-    return <div className="lidar-bev-state">LiDAR load failed{errorMessage ? `: ${errorMessage}` : ""}</div>;
-  }
-  if (status === "unavailable" || !pointCloud) return <div className="lidar-bev-state">该场景未提供 LiDAR 点云</div>;
-  if (webglUnavailable) {
-    return (
-      <div className="lidar-bev-shell">
-        <BasicBevFallback frame={frame} />
-        <p className="lidar-bev-warning">WebGL 不可用，已切换到基础检测框视图</p>
-      </div>
-    );
-  }
+  const message = status === "error"
+    ? `LiDAR load failed${errorMessage ? `: ${errorMessage}` : ""}`
+    : status === "unavailable"
+      ? "该场景未提供 LiDAR 点云"
+      : "LiDAR 点云加载中";
+
   return (
     <div className="lidar-bev-shell">
-      <canvas ref={canvasRef} className="lidar-bev-canvas" data-testid="lidar-webgl-canvas" />
+      {webglUnavailable && pointCloud ? <BasicBevFallback frame={frame} /> : pointCloud && <canvas ref={canvasRef} className="lidar-bev-canvas" data-testid="lidar-webgl-canvas" />}
+      {(!pointCloud || status !== "ready") && <div className="lidar-bev-state lidar-bev-overlay">{message}</div>}
       <span className="lidar-bev-source">LiDAR · 原始点云</span>
       <span className="lidar-bev-axis lidar-bev-axis-x">横向 / m</span>
       <span className="lidar-bev-axis lidar-bev-axis-z">前向 / m</span>
+      {webglUnavailable && pointCloud && <p className="lidar-bev-warning">WebGL 不可用，已切换到基础检测框视图</p>}
     </div>
   );
 }

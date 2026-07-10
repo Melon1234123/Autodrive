@@ -563,5 +563,3 @@ h1 {
 .lidar-bev-fallback-grid { position:absolute; inset:0; background:linear-gradient(rgba(87,157,151,.18) 1px,transparent 1px),linear-gradient(90deg,rgba(87,157,151,.18) 1px,transparent 1px); background-size:12.5% 11.11%; }
 .lidar-bev-fallback-ego { position:absolute; z-index:1; left:calc(50% - 13px); bottom:14%; width:26px; height:48px; display:grid; place-items:center; border:1px solid #ffd4e2; color:#fff1f6; background:#ef4e88; font-size:8px; font-weight:900; }
 .lidar-bev-fallback-object { position:absolute; z-index:1; min-width:38px; padding:3px 5px; border:1px solid #77c5bd; color:#dffef8; background:rgba(11,46,46,.86); font-size:9px; white-space:nowrap; transform:translate(-50%, 50%); }
-@media (max-width:1120px) { .app-shell { padding:20px; }.command-grid { grid-template-columns:1fr; grid-template-rows:auto; } .diagnosis-panel { grid-column:auto; } }
-@media (max-width:680px) { .app-shell { padding:12px; }.header-bar { border-radius:15px; }.header-actions { width:100%; justify-content:flex-start; }.scene-selector select { max-width:125px; } }

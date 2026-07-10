@@ -40,7 +40,9 @@ export class LidarFrameCache {
 
   constructor(
     private readonly maxEntries = 6,
-    private readonly fetchFrame: typeof fetch = fetch,
+    // Calling an unbound Window.fetch through an object method throws
+    // "Illegal invocation" in browsers, so retain a bound wrapper.
+    private readonly fetchFrame: typeof fetch = (input, init) => globalThis.fetch(input, init),
   ) {
     if (!Number.isInteger(maxEntries) || maxEntries < 1) {
       throw new Error("LiDAR cache capacity must be a positive integer");

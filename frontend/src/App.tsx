@@ -710,6 +710,9 @@ function useMapCanvas(
     const laneEdges = drawRoadStrip(localRoute, 6.3, roadFill, "rgba(66, 112, 174, 0.7)", 3);
     drawPolyline(laneEdges.leftEdge, "rgba(230, 239, 255, 0.78)", 1.4);
     drawPolyline(laneEdges.rightEdge, "rgba(230, 239, 255, 0.78)", 1.4);
+    // The yellow dashed divider establishes the same navigation-road hierarchy as the reference view.
+    const yellowDivider = offsetRoute(localRoute, 1.85).leftEdge;
+    drawPolyline(yellowDivider, "#f4c534", 1.7, 2, [10, 9]);
 
     for (let marker = Math.max(10, Math.ceil(visibleBounds.minForward / 10) * 10); marker <= visibleBounds.maxForward; marker += 10) {
       const routePoint = localRoute.reduce((nearest, point) => (Math.abs(point.forward - marker) < Math.abs(nearest.forward - marker) ? point : nearest), localRoute[0]);

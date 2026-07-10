@@ -193,6 +193,24 @@ export function resolveReplayTime(event: Pick<RiskEvent, "seekTime">): number {
   return event.seekTime;
 }
 
+export type OptionalLidarLoadResult = {
+  index: LidarIndex | null;
+  errorMessage: string | null;
+};
+
+/** Load the optional LiDAR index without allowing its failure to reject scene data loading. */
+export async function loadOptionalLidarIndex(
+  lidarSource: string,
+  signal?: AbortSignal,
+  loader: (url: string, signal?: AbortSignal) => Promise<LidarIndex> = loadLidarIndex,
+): Promise<OptionalLidarLoadResult> {
+  try {
+    return { index: await loader(lidarSource, signal), errorMessage: null };
+  } catch (error: unknown) {
+    return { index: null, errorMessage: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 function resolveLidarFrameUrl(indexFile: string, frameFile: string): string {
   return new URL(frameFile, new URL(indexFile, window.location.origin)).toString();
 }
@@ -864,6 +882,7 @@ function App() {
   const [showDashboard, setShowDashboard] = useState(false);
   const [lidarIndex, setLidarIndex] = useState<LidarIndex | null>(null);
   const [lidarStatus, setLidarStatus] = useState<"loading" | "unavailable" | "ready" | "error">("loading");
+  const [lidarError, setLidarError] = useState<string | null>(null);
   const [lidarCache] = useState(() => new LidarFrameCache());
   const [currentPointCloud, setCurrentPointCloud] = useState<Float32Array | null>(null);
   const [lidarHistory, setLidarHistory] = useState<Float32Array[]>([]);
@@ -1033,6 +1052,7 @@ function App() {
     setCurrentPointCloud(null);
     setLidarHistory([]);
     setLidarStatus(lidarSource ? "loading" : "unavailable");
+    setLidarError(null);
 
     Promise.all([
       fetch(selectedScene.telemetryFile, { signal: controller.signal }).then((response) => {
@@ -1046,15 +1066,12 @@ function App() {
       selectedScene.metadataFile
         ? fetch(selectedScene.metadataFile, { signal: controller.signal }).then((response) => (response.ok ? response.json() as Promise<DatasetMeta> : null))
         : Promise.resolve(null),
-      lidarSource ? loadLidarIndex(lidarSource, controller.signal) : Promise.resolve(null),
     ])
-      .then(([nextTelemetry, nextPerception, nextMeta, nextLidarIndex]) => {
+      .then(([nextTelemetry, nextPerception, nextMeta]) => {
         if (controller.signal.aborted) return;
         setTelemetry(nextTelemetry);
         setPerception(nextPerception);
         setDatasetMeta(nextMeta);
-        setLidarIndex(nextLidarIndex);
-        if (lidarSource) setLidarStatus("ready");
         videoRef.current?.load();
       })
       .catch((fetchError: unknown) => {
@@ -1070,6 +1087,22 @@ function App() {
       .finally(() => {
         if (!controller.signal.aborted) setSceneLoading(false);
       });
+
+    // LiDAR is optional: an unavailable or malformed index must not prevent the
+    // camera replay, telemetry, perception, map, or diagnosis data from loading.
+    if (lidarSource) {
+      loadOptionalLidarIndex(lidarSource, controller.signal)
+        .then(({ index, errorMessage }) => {
+          if (controller.signal.aborted) return;
+          setLidarIndex(index);
+          if (errorMessage) {
+            setLidarStatus("error");
+            setLidarError(errorMessage);
+          } else {
+            setLidarStatus("ready");
+          }
+        });
+    }
 
     return () => controller.abort();
   }, [selectedScene]);
@@ -1364,7 +1397,7 @@ function App() {
             <span>LiDAR 3D/BEV 感知</span>
             <strong>高危 {highRiskObjects} / 中危 {mediumRiskObjects}</strong>
           </div>
-          <LidarBev pointCloud={currentPointCloud} frame={currentPerception} history={lidarHistory} status={lidarStatus} />
+          <LidarBev pointCloud={currentPointCloud} frame={currentPerception} history={lidarHistory} status={lidarStatus} errorMessage={lidarError} />
           <div className="lidar-metadata" aria-label="LiDAR 数据状态">
             <span>源 {resolveLidarSource(selectedScene) ?? "camera-only"}</span>
             <span>点 {currentLidarFrame?.pointCount.toLocaleString() ?? "--"}</span>

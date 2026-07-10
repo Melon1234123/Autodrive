@@ -28,6 +28,7 @@ export type LidarBevProps = {
   /** Up to two earlier decoded frames. The caller owns temporal alignment. */
   history: Float32Array[];
   status: "loading" | "unavailable" | "ready" | "error";
+  errorMessage?: string | null;
 };
 
 const VIEW = { front: 72, rear: 12, side: 32, range: 60 };
@@ -203,7 +204,7 @@ function BasicBevFallback({ frame }: Pick<LidarBevProps, "frame">) {
   );
 }
 
-export function LidarBev({ pointCloud, frame, history, status }: LidarBevProps) {
+export function LidarBev({ pointCloud, frame, history, status, errorMessage }: LidarBevProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [webglUnavailable, setWebglUnavailable] = useState(false);
 
@@ -255,6 +256,9 @@ export function LidarBev({ pointCloud, frame, history, status }: LidarBevProps) 
   }, [frame, history, pointCloud, webglUnavailable]);
 
   if (status === "loading") return <div className="lidar-bev-state">LiDAR 点云加载中</div>;
+  if (status === "error") {
+    return <div className="lidar-bev-state">LiDAR load failed{errorMessage ? `: ${errorMessage}` : ""}</div>;
+  }
   if (status === "unavailable" || !pointCloud) return <div className="lidar-bev-state">该场景未提供 LiDAR 点云</div>;
   if (webglUnavailable) {
     return (

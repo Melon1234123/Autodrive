@@ -52,6 +52,44 @@ backend/.venv/bin/python scripts/convert_nuscenes_rich.py \
 backend/.venv/bin/python scripts/export_foxglove_mcap.py
 ```
 
+## 多场景数据集
+
+前端会读取 `frontend/public/scenes.json`，并在顶部“场景”下拉框同步切换视频、telemetry、感知数据和元数据。现有根目录数据已作为 `default` 场景保留，因此旧的单场景部署无需迁移。
+
+将多个 nuScenes 场景导出到独立目录并自动登记到清单：
+
+```bash
+backend/.venv/bin/python scripts/convert_nuscenes_rich.py \
+  --dataroot "$HOME/Datasets/nuscenes-mini-5gb" \
+  --scene scene-0061 \
+  --output-dir frontend/public/scenes/scene-0061 \
+  --manifest frontend/public/scenes.json \
+  --scene-id scene-0061
+```
+
+对每个目标场景重复该命令即可。每个条目必须包含 `sample.mp4`、`telemetry.json`、`perception.json`、`dataset-meta.json`；生成器会以 `id` 为键覆盖同名条目而不会影响其他场景。可选的 `riskEventsFile` 预留给历史风险事件模块使用。
+
+### LiDAR 点云导出与回放
+
+导出场景的视频/感知数据后，可为同一场景生成轻量 LiDAR TOP 关键帧。该命令会更新清单中的
+`lidarIndexFile`，驾驶舱据此同步加载当前关键帧和前两帧历史点云：
+
+```bash
+backend/.venv/bin/python scripts/export_nuscenes_lidar.py \
+  --dataroot "$HOME/Datasets/nuscenes-mini-5gb" \
+  --scene scene-0061 \
+  --perception frontend/public/scenes/scene-0061/perception.json \
+  --manifest frontend/public/scenes.json \
+  --scene-id scene-0061 \
+  --output-dir frontend/public/scenes/scene-0061/lidar
+```
+
+生成路径为 `frontend/public/scenes/<scene-id>/lidar/index.json` 与
+`frames/*.bin`。`index.json` 使用相对帧路径，并在清单中登记为
+`"lidarIndexFile": "/scenes/<scene-id>/lidar/index.json"`。点云为裁剪、下采样后的
+`xyzI float32 little-endian` 数据，目标是每个演示场景保持在约 5 GB 总数据预算内。
+没有该字段的相机场景仍会正常加载视频、地图和诊断；BEV 面板会明确显示“仅相机”，不会沿用上一场景的点云。
+
 API Key 请放在 `backend/.env`，不要提交。后端会读取：
 
 ```text

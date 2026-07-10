@@ -11,8 +11,8 @@ export interface LidarIndex {
   frames: LidarFrameIndex[];
 }
 
-export async function loadLidarIndex(url: string): Promise<LidarIndex> {
-  const response = await fetch(url);
+export async function loadLidarIndex(url: string, signal?: AbortSignal): Promise<LidarIndex> {
+  const response = await fetch(url, { signal });
   if (!response.ok) {
     throw new Error(`Unable to load LiDAR index: ${response.status} ${response.statusText}`);
   }
@@ -64,11 +64,11 @@ export class LidarFrameCache {
     return pointCloud;
   }
 
-  async load(url: string): Promise<Float32Array> {
+  async load(url: string, signal?: AbortSignal): Promise<Float32Array> {
     const cached = this.get(url);
     if (cached) return cached;
 
-    const response = await this.fetchFrame(url);
+    const response = await this.fetchFrame(url, { signal });
     if (!response.ok) {
       throw new Error(`Unable to load LiDAR frame: ${response.status} ${response.statusText}`);
     }

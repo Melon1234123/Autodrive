@@ -1,25 +1,47 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent, WheelEvent } from "react";
+import { RiskEventsPanel } from "./RiskEventsPanel";
+import { deriveRiskEvents } from "./risk-events";
+import type { RiskEvent } from "./risk-events";
+import { LidarBev } from "./LidarBev";
+import { findNearestLidarFrame, LidarFrameCache, loadLidarIndex } from "./lidar";
+import type { LidarIndex } from "./lidar";
 import {
   Activity,
   AlertTriangle,
+  ArrowDownRight,
+  ArrowUpRight,
   BrainCircuit,
   Camera,
+  CircleCheck,
   Database,
+  FileSearch,
   Gauge,
   GitBranch,
   Layers3,
   LoaderCircle,
   Map,
+  LocateFixed,
+  Minus,
+  Move,
+  Plus,
   Radio,
   Route,
+  ChevronDown,
   ServerCog,
+  Shield,
   ShieldCheck,
+  Sparkles,
   Zap,
 } from "lucide-react";
 
 type RiskLevel = "low" | "medium" | "high" | "unknown";
 type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 type DiagnosisMode = "model" | "fallback" | "unknown";
+type MapViewport = { zoom: number; offsetX: number; offsetY: number };
+
+const DEFAULT_MAP_VIEWPORT: MapViewport = { zoom: 1, offsetX: 0, offsetY: 0 };
+const clampMapZoom = (zoom: number) => Math.min(2.6, Math.max(0.55, zoom));
 
 type TelemetryFrame = {
   time: number;
@@ -93,6 +115,25 @@ type DatasetMeta = {
   frameMode?: string;
 };
 
+type SceneManifestEntry = {
+  id: string;
+  label: string;
+  description?: string;
+  videoFile: string;
+  telemetryFile: string;
+  perceptionFile: string;
+  metadataFile?: string;
+  lidarIndexFile?: string;
+  /** Optional cue for event history; other modules may consume this unchanged. */
+  riskEventsFile?: string;
+};
+
+type SceneManifest = {
+  version: number;
+  defaultSceneId: string;
+  scenes: SceneManifestEntry[];
+};
+
 type HealthStatus = {
   status: string;
   mode: Exclude<DiagnosisMode, "unknown">;
@@ -101,6 +142,14 @@ type HealthStatus = {
 
 const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:8080/ws";
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
+const LEGACY_SCENE: SceneManifestEntry = {
+  id: "default",
+  label: "默认实景",
+  videoFile: "/sample.mp4",
+  telemetryFile: "/telemetry.json",
+  perceptionFile: "/perception.json",
+  metadataFile: "/dataset-meta.json",
+};
 
 const riskText: Record<RiskLevel, string> = {
   low: "低风险",
@@ -134,6 +183,20 @@ function findNearestFrame<T extends { time: number }>(frames: T[], currentTime: 
   }, frames[0]);
 }
 
+/** Returns null for camera-only scenes so stale LiDAR data is never retained. */
+export function resolveLidarSource(scene: Pick<SceneManifestEntry, "lidarIndexFile">): string | null {
+  return scene.lidarIndexFile ?? null;
+}
+
+/** Keep every replay consumer on the risk event's recorded peak timestamp. */
+export function resolveReplayTime(event: Pick<RiskEvent, "seekTime">): number {
+  return event.seekTime;
+}
+
+function resolveLidarFrameUrl(indexFile: string, frameFile: string): string {
+  return new URL(frameFile, new URL(indexFile, window.location.origin)).toString();
+}
+
 function formatNumber(value: number, digits = 1) {
   return Number.isFinite(value) ? value.toFixed(digits) : "--";
 }
@@ -165,7 +228,41 @@ function deriveFrameRisk(frame: TelemetryFrame | null, perception: PerceptionFra
   return "low";
 }
 
-function useBevCanvas(frame: PerceptionFrame | null, canvasRef: React.RefObject<HTMLCanvasElement | null>) {
+function drawEgoCar(ctx: CanvasRenderingContext2D, x: number, y: number, size = 1, alpha = 1) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.globalAlpha = alpha;
+  ctx.shadowColor = "rgba(255, 53, 123, .72)";
+  ctx.shadowBlur = 18 * size;
+  const body = ctx.createLinearGradient(0, -18 * size, 0, 18 * size);
+  body.addColorStop(0, "#ff7ba9");
+  body.addColorStop(.45, "#f34886");
+  body.addColorStop(1, "#c91f60");
+  ctx.fillStyle = body;
+  ctx.strokeStyle = "#ffd5e4";
+  ctx.lineWidth = 1.4 * size;
+  ctx.beginPath();
+  ctx.roundRect(-8 * size, -17 * size, 16 * size, 34 * size, 5 * size);
+  ctx.fill();
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "#5f183b";
+  ctx.beginPath();
+  ctx.roundRect(-5.2 * size, -9.5 * size, 10.4 * size, 13 * size, 3 * size);
+  ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,.68)";
+  ctx.fillRect(-4.1 * size, -8.1 * size, 8.2 * size, 1.6 * size);
+  ctx.fillStyle = "#311126";
+  [-1, 1].forEach((side) => {
+    ctx.beginPath(); ctx.roundRect(side * 8 * size - (side > 0 ? 0 : 2 * size), -11 * size, 2 * size, 7 * size, 1 * size); ctx.fill();
+    ctx.beginPath(); ctx.roundRect(side * 8 * size - (side > 0 ? 0 : 2 * size), 5 * size, 2 * size, 7 * size, 1 * size); ctx.fill();
+  });
+  ctx.fillStyle = "#ffe2ec";
+  ctx.fillRect(-5.2 * size, -15.1 * size, 10.4 * size, 2.1 * size);
+  ctx.restore();
+}
+
+function useBevCanvas(frames: PerceptionFrame[], frame: PerceptionFrame | null, canvasRef: React.RefObject<HTMLCanvasElement | null>) {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) {
@@ -197,17 +294,22 @@ function useBevCanvas(frame: PerceptionFrame | null, canvasRef: React.RefObject<
     const origin = { x: margin.left + usableWidth / 2, y: h - margin.bottom - view.rear * scale };
 
     const background = ctx.createLinearGradient(0, 0, 0, h);
-    background.addColorStop(0, "#061012");
-    background.addColorStop(0.54, "#07100d");
-    background.addColorStop(1, "#040605");
+    background.addColorStop(0, "#f9fcf8");
+    background.addColorStop(.58, "#edf4ef");
+    background.addColorStop(1, "#e1ece5");
     ctx.fillStyle = background;
     ctx.fillRect(0, 0, w, h);
-    const toCanvas = (point: { x: number; y: number }) => ({
-      x: origin.x + point.y * scale,
-      y: origin.y - point.x * scale,
-    });
+    // Oblique ground-plane projection: the far grid compresses toward the horizon.
+    const toCanvas = (point: { x: number; y: number }) => {
+      const depth = Math.min(1, Math.max(0, (point.x + view.rear) / (view.front + view.rear)));
+      const lateralScale = 1.18 - depth * .68;
+      return {
+        x: origin.x + point.y * scale * lateralScale,
+        y: origin.y - point.x * scale * (.74 + depth * .26),
+      };
+    };
 
-    ctx.strokeStyle = "rgba(118, 208, 222, 0.14)";
+    ctx.strokeStyle = "rgba(72, 111, 106, 0.15)";
     ctx.lineWidth = 1;
     for (let lateral = -30; lateral <= 30; lateral += 10) {
       const a = toCanvas({ x: -view.rear, y: lateral });
@@ -225,7 +327,7 @@ function useBevCanvas(frame: PerceptionFrame | null, canvasRef: React.RefObject<
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
       if (longitudinal > 0) {
-        ctx.fillStyle = "rgba(196, 230, 234, 0.48)";
+        ctx.fillStyle = "rgba(62, 96, 91, 0.52)";
         ctx.font = "11px Inter, sans-serif";
         ctx.fillText(`${longitudinal}m`, b.x - 30, b.y - 6);
       }
@@ -234,8 +336,8 @@ function useBevCanvas(frame: PerceptionFrame | null, canvasRef: React.RefObject<
     const leftFov = toCanvas({ x: 66, y: 36 });
     const rightFov = toCanvas({ x: 66, y: -36 });
     ctx.save();
-    ctx.fillStyle = "rgba(65, 211, 255, 0.055)";
-    ctx.strokeStyle = "rgba(65, 211, 255, 0.24)";
+    ctx.fillStyle = "rgba(104, 169, 148, 0.10)";
+    ctx.strokeStyle = "rgba(66, 129, 119, 0.34)";
     ctx.lineWidth = 1.4;
     ctx.beginPath();
     ctx.moveTo(origin.x, origin.y);
@@ -246,6 +348,20 @@ function useBevCanvas(frame: PerceptionFrame | null, canvasRef: React.RefObject<
     ctx.stroke();
     ctx.restore();
 
+    const currentIndex = frame ? frames.indexOf(frame) : -1;
+    // A short temporal stack makes it explicit that this is fused BEV, not a single-frame top view.
+    if (currentIndex > 0) {
+      for (let age = 4; age >= 1; age -= 1) {
+        const source = frames[currentIndex - age];
+        if (!source) continue;
+        source.objects.slice(0, 18).forEach((object) => {
+          if (object.x < -view.rear || object.x > view.front || Math.abs(object.y) > view.side) return;
+          const p = toCanvas(object);
+          ctx.save(); ctx.globalAlpha = .07 + (4 - age) * .035;
+          ctx.fillStyle = "#7fa99d"; ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(2, object.width * scale * .28), 0, Math.PI * 2); ctx.fill(); ctx.restore();
+        });
+      }
+    }
     const drawObject = (object: PerceptionObject) => {
       const distance = Math.hypot(object.x, object.y);
       if (object.x < -view.rear || object.x > view.front || Math.abs(object.y) > view.side) {
@@ -254,7 +370,7 @@ function useBevCanvas(frame: PerceptionFrame | null, canvasRef: React.RefObject<
       if (object.risk === "low" && distance > 52) {
         return;
       }
-      const color = object.risk === "high" ? "#ff4e3f" : object.risk === "medium" ? "#ffd45a" : "#51e6d6";
+      const color = object.risk === "high" ? "#f05a91" : object.risk === "medium" ? "#d9a83d" : "#4f9188";
       const cos = Math.cos(object.yaw);
       const sin = Math.sin(object.yaw);
       const corners = [
@@ -269,9 +385,19 @@ function useBevCanvas(frame: PerceptionFrame | null, canvasRef: React.RefObject<
         }),
       );
 
+      // Extruded object prism: ground footprint, lifted top face and visible side faces.
+      const lift = Math.max(5, Math.min(18, object.height * scale * .75));
+      const topCorners = corners.map((corner) => ({ x: corner.x, y: corner.y - lift }));
       ctx.save();
+      ctx.fillStyle = object.risk === "high" ? "rgba(240, 90, 145, .19)" : object.risk === "medium" ? "rgba(217, 168, 61, .16)" : "rgba(79,145,136,.13)";
+      ctx.beginPath(); ctx.ellipse(corners.reduce((sum, point) => sum + point.x, 0) / 4, corners.reduce((sum, point) => sum + point.y, 0) / 4 + 4, Math.max(5, object.width * scale * .65), Math.max(2, object.width * scale * .2), 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = color;
+      ctx.globalAlpha = .18;
+      ctx.beginPath(); ctx.moveTo(corners[1].x, corners[1].y); ctx.lineTo(corners[2].x, corners[2].y); ctx.lineTo(topCorners[2].x, topCorners[2].y); ctx.lineTo(topCorners[1].x, topCorners[1].y); ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = .28;
+      ctx.beginPath(); ctx.moveTo(corners[2].x, corners[2].y); ctx.lineTo(corners[3].x, corners[3].y); ctx.lineTo(topCorners[3].x, topCorners[3].y); ctx.lineTo(topCorners[2].x, topCorners[2].y); ctx.closePath(); ctx.fill();
       ctx.strokeStyle = color;
-      ctx.fillStyle = object.risk === "high" ? "rgba(255, 78, 63, 0.24)" : object.risk === "medium" ? "rgba(255, 212, 90, 0.18)" : "rgba(81, 230, 214, 0.14)";
+      ctx.fillStyle = object.risk === "high" ? "rgba(240, 90, 145, 0.16)" : object.risk === "medium" ? "rgba(217, 168, 61, 0.14)" : "rgba(79, 145, 136, 0.11)";
       ctx.shadowColor = color;
       ctx.shadowBlur = object.risk === "low" ? 3 : 12;
       ctx.lineWidth = object.risk === "high" ? 2.6 : 1.8;
@@ -286,6 +412,9 @@ function useBevCanvas(frame: PerceptionFrame | null, canvasRef: React.RefObject<
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
+      ctx.globalAlpha = .92;
+      ctx.beginPath(); topCorners.forEach((corner, index) => index ? ctx.lineTo(corner.x, corner.y) : ctx.moveTo(corner.x, corner.y)); ctx.closePath(); ctx.fill(); ctx.stroke();
+      [0, 1, 2, 3].forEach((index) => { ctx.beginPath(); ctx.moveTo(corners[index].x, corners[index].y); ctx.lineTo(topCorners[index].x, topCorners[index].y); ctx.stroke(); });
       ctx.restore();
 
       if (object.risk !== "low" || distance < 24) {
@@ -301,29 +430,42 @@ function useBevCanvas(frame: PerceptionFrame | null, canvasRef: React.RefObject<
       .sort((a, b) => Math.hypot(b.x, b.y) - Math.hypot(a.x, a.y))
       .forEach(drawObject);
 
-    const egoFront = toCanvas({ x: 2.4, y: 0 });
-    const egoRearLeft = toCanvas({ x: -2.1, y: 1.0 });
-    const egoRearRight = toCanvas({ x: -2.1, y: -1.0 });
-    ctx.save();
-    ctx.fillStyle = "#d8ff63";
-    ctx.strokeStyle = "rgba(7, 9, 7, 0.9)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(egoFront.x, egoFront.y);
-    ctx.lineTo(egoRearLeft.x, egoRearLeft.y);
-    ctx.lineTo(egoRearRight.x, egoRearRight.y);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
+    drawEgoCar(ctx, origin.x, origin.y, Math.max(.68, scale / 11));
 
-    ctx.fillStyle = "rgba(232, 246, 245, 0.72)";
+    ctx.fillStyle = "rgba(39, 72, 68, .9)";
     ctx.font = "12px Inter, sans-serif";
-    ctx.fillText("BEV ego frame / nuScenes 标注目标", 14, 24);
-  }, [canvasRef, frame]);
+    ctx.fillText("BEV / nuScenes 感知目标", 14, 24);
+    const legendY = h - 16;
+    const legend = [
+      { color: "#4f9188", label: "常规" },
+      { color: "#d9a83d", label: "关注" },
+      { color: "#f05a91", label: "高危" },
+    ];
+    let legendX = 14;
+    legend.forEach((item) => {
+      ctx.fillStyle = item.color;
+      ctx.beginPath();
+      ctx.arc(legendX + 4, legendY - 4, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(39, 72, 68, .72)";
+      ctx.font = "11px Inter, sans-serif";
+      ctx.fillText(item.label, legendX + 12, legendY);
+      legendX += 48;
+    });
+    ctx.fillStyle = "rgba(39, 72, 68, .58)";
+    ctx.textAlign = "right";
+    ctx.fillText(`对象 ${frame?.objects.length ?? 0}`, w - 14, legendY);
+    ctx.textAlign = "left";
+  }, [canvasRef, frame, frames]);
 }
 
-function useMapCanvas(frames: PerceptionFrame[], currentFrame: PerceptionFrame | null, canvasRef: React.RefObject<HTMLCanvasElement | null>) {
+function useMapCanvas(
+  frames: PerceptionFrame[],
+  currentFrame: PerceptionFrame | null,
+  canvasRef: React.RefObject<HTMLCanvasElement | null>,
+  viewport: MapViewport,
+  highlightedRiskEvent: RiskEvent | null,
+) {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) {
@@ -345,8 +487,8 @@ function useMapCanvas(frames: PerceptionFrame[], currentFrame: PerceptionFrame |
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssWidth, cssHeight);
     const mapBackground = ctx.createLinearGradient(0, 0, cssWidth, cssHeight);
-    mapBackground.addColorStop(0, "#071014");
-    mapBackground.addColorStop(1, "#050806");
+    mapBackground.addColorStop(0, "#f8fcf8");
+    mapBackground.addColorStop(1, "#e5efe8");
     ctx.fillStyle = mapBackground;
     ctx.fillRect(0, 0, cssWidth, cssHeight);
 
@@ -361,10 +503,16 @@ function useMapCanvas(frames: PerceptionFrame[], currentFrame: PerceptionFrame |
     const cos = Math.cos(heading);
     const sin = Math.sin(heading);
     const view = { front: 76, rear: 12, side: 22 };
-    const scale = Math.min(panel.width / (view.side * 2), panel.height / (view.front + view.rear));
+    const scale = Math.min(panel.width / (view.side * 2), panel.height / (view.front + view.rear)) * viewport.zoom;
     const egoCanvas = {
-      x: panel.x + panel.width / 2,
-      y: panel.y + panel.height - view.rear * scale,
+      x: panel.x + panel.width / 2 + viewport.offsetX,
+      y: panel.y + panel.height - view.rear * scale + viewport.offsetY,
+    };
+    const visibleBounds = {
+      minLeft: (panel.x - egoCanvas.x) / scale,
+      maxLeft: (panel.x + panel.width - egoCanvas.x) / scale,
+      minForward: (egoCanvas.y - (panel.y + panel.height)) / scale,
+      maxForward: (egoCanvas.y - panel.y) / scale,
     };
     const toEgo = (frame: PerceptionFrame) => {
       const dx = frame.ego.x - current.ego.x;
@@ -374,15 +522,19 @@ function useMapCanvas(frames: PerceptionFrame[], currentFrame: PerceptionFrame |
         left: -sin * dx + cos * dy,
       };
     };
-    const toCanvas = (forward: number, left: number) => ({
-      x: egoCanvas.x + left * scale,
-      y: egoCanvas.y - forward * scale,
-    });
+    const toCanvas = (forward: number, left: number) => {
+      const depth = Math.min(1, Math.max(0, (forward - visibleBounds.minForward) / (visibleBounds.maxForward - visibleBounds.minForward || 1)));
+      const lateralScale = 1.12 - depth * .58;
+      return {
+        x: egoCanvas.x + left * scale * lateralScale,
+        y: egoCanvas.y - forward * scale * (.76 + depth * .24),
+      };
+    };
     const pointToCanvas = (point: { forward: number; left: number }) => toCanvas(point.forward, point.left);
 
     ctx.save();
-    ctx.fillStyle = "rgba(2, 8, 9, 0.72)";
-    ctx.strokeStyle = "rgba(116, 215, 231, 0.16)";
+    ctx.fillStyle = "rgba(251, 253, 250, 0.94)";
+    ctx.strokeStyle = "rgba(83, 125, 118, 0.22)";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.roundRect(panel.x, panel.y, panel.width, panel.height, 6);
@@ -396,30 +548,34 @@ function useMapCanvas(frames: PerceptionFrame[], currentFrame: PerceptionFrame |
     ctx.clip();
 
     const localBackground = ctx.createLinearGradient(0, panel.y, 0, panel.y + panel.height);
-    localBackground.addColorStop(0, "rgba(13, 28, 30, 0.82)");
-    localBackground.addColorStop(0.48, "rgba(8, 15, 14, 0.92)");
-    localBackground.addColorStop(1, "rgba(4, 7, 6, 0.98)");
+    localBackground.addColorStop(0, "rgba(244, 249, 245, 0.98)");
+    localBackground.addColorStop(0.48, "rgba(233, 242, 236, 0.99)");
+    localBackground.addColorStop(1, "rgba(220, 233, 225, 1)");
     ctx.fillStyle = localBackground;
     ctx.fillRect(panel.x, panel.y, panel.width, panel.height);
 
-    ctx.strokeStyle = "rgba(116, 215, 231, 0.08)";
+    ctx.strokeStyle = "rgba(70, 112, 105, 0.10)";
     ctx.lineWidth = 1;
-    for (let lateral = -20; lateral <= 20; lateral += 5) {
+    const lateralStart = Math.floor(visibleBounds.minLeft / 5) * 5;
+    const lateralEnd = Math.ceil(visibleBounds.maxLeft / 5) * 5;
+    for (let lateral = lateralStart; lateral <= lateralEnd; lateral += 5) {
       const x = egoCanvas.x + lateral * scale;
       ctx.beginPath();
       ctx.moveTo(x, panel.y);
       ctx.lineTo(x, panel.y + panel.height);
       ctx.stroke();
     }
-    for (let forward = 0; forward <= view.front; forward += 10) {
+    const forwardStart = Math.ceil(visibleBounds.minForward / 10) * 10;
+    const forwardEnd = Math.floor(visibleBounds.maxForward / 10) * 10;
+    for (let forward = forwardStart; forward <= forwardEnd; forward += 10) {
       const y = egoCanvas.y - forward * scale;
       ctx.beginPath();
       ctx.moveTo(panel.x, y);
       ctx.lineTo(panel.x + panel.width, y);
       ctx.stroke();
-      ctx.fillStyle = "rgba(196, 230, 234, 0.34)";
+      ctx.fillStyle = "rgba(78, 119, 111, 0.30)";
       ctx.font = "11px Inter, sans-serif";
-      if (forward > 0) {
+      if (forward > 0 && y > panel.y + 12 && y < panel.y + panel.height - 8) {
         ctx.fillText(`${forward}m`, panel.x + panel.width - 42, y - 5);
       }
     }
@@ -453,11 +609,17 @@ function useMapCanvas(frames: PerceptionFrame[], currentFrame: PerceptionFrame |
     const routeStart = Math.max(0, currentIndex - 18);
     const routeEnd = Math.min(frames.length - 1, currentIndex + 82);
     let localRoute = frames.slice(routeStart, routeEnd + 1).map(toEgo);
-    localRoute = localRoute.filter((point) => point.forward >= -view.rear - 8 && point.forward <= view.front + 12 && Math.abs(point.left) <= view.side + 16);
+    localRoute = localRoute.filter(
+      (point) =>
+        point.forward >= visibleBounds.minForward - 12 &&
+        point.forward <= visibleBounds.maxForward + 12 &&
+        point.left >= visibleBounds.minLeft - 12 &&
+        point.left <= visibleBounds.maxLeft + 12,
+    );
     if (localRoute.length < 2) {
       localRoute = [
-        { forward: -view.rear, left: 0 },
-        { forward: view.front, left: 0 },
+        { forward: visibleBounds.minForward, left: 0 },
+        { forward: visibleBounds.maxForward, left: 0 },
       ];
     }
 
@@ -516,23 +678,26 @@ function useMapCanvas(frames: PerceptionFrame[], currentFrame: PerceptionFrame |
     };
 
     const roadFill = ctx.createLinearGradient(0, panel.y, 0, panel.y + panel.height);
-    roadFill.addColorStop(0, "rgba(46, 57, 56, 0.88)");
-    roadFill.addColorStop(0.55, "rgba(30, 38, 36, 0.92)");
-    roadFill.addColorStop(1, "rgba(17, 24, 22, 0.98)");
+    roadFill.addColorStop(0, "rgba(211, 222, 214, 0.97)");
+    roadFill.addColorStop(0.55, "rgba(192, 207, 197, 0.98)");
+    roadFill.addColorStop(1, "rgba(178, 195, 184, 1)");
     const shoulderFill = ctx.createLinearGradient(0, panel.y, 0, panel.y + panel.height);
-    shoulderFill.addColorStop(0, "rgba(23, 45, 45, 0.54)");
-    shoulderFill.addColorStop(1, "rgba(9, 16, 14, 0.38)");
-    drawRoadStrip(localRoute, 10.4, shoulderFill, "rgba(75, 125, 130, 0.18)");
-    const laneEdges = drawRoadStrip(localRoute, 6.3, roadFill, "rgba(160, 207, 205, 0.16)", 2);
-    drawPolyline(laneEdges.leftEdge, "rgba(213, 230, 214, 0.42)", 1.4);
-    drawPolyline(laneEdges.rightEdge, "rgba(213, 230, 214, 0.42)", 1.4);
+    shoulderFill.addColorStop(0, "rgba(157, 190, 171, 0.42)");
+    shoulderFill.addColorStop(1, "rgba(137, 173, 152, 0.30)");
+    // Raised sand-table road layers: offset shadows create a tangible roadbed.
+    const roadShadow = localRoute.map((point) => ({ forward: point.forward - .85, left: point.left }));
+    drawRoadStrip(roadShadow, 11.2, "rgba(107, 139, 121, .16)", "rgba(82, 114, 99, .16)", 4);
+    drawRoadStrip(localRoute, 10.4, shoulderFill, "rgba(73, 122, 111, 0.18)");
+    const laneEdges = drawRoadStrip(localRoute, 6.3, roadFill, "rgba(75, 111, 102, 0.22)", 3);
+    drawPolyline(laneEdges.leftEdge, "rgba(255, 255, 251, 0.76)", 1.4);
+    drawPolyline(laneEdges.rightEdge, "rgba(255, 255, 251, 0.76)", 1.4);
 
-    for (let marker = 10; marker <= view.front; marker += 10) {
+    for (let marker = Math.max(10, Math.ceil(visibleBounds.minForward / 10) * 10); marker <= visibleBounds.maxForward; marker += 10) {
       const routePoint = localRoute.reduce((nearest, point) => (Math.abs(point.forward - marker) < Math.abs(nearest.forward - marker) ? point : nearest), localRoute[0]);
       const y = pointToCanvas(routePoint).y;
       if (y > panel.y + 8 && y < panel.y + panel.height - 8) {
         ctx.save();
-        ctx.strokeStyle = "rgba(244, 255, 225, 0.16)";
+        ctx.strokeStyle = "rgba(255, 255, 251, 0.74)";
         ctx.lineWidth = 1;
         ctx.setLineDash([3, 7]);
         ctx.beginPath();
@@ -545,17 +710,22 @@ function useMapCanvas(frames: PerceptionFrame[], currentFrame: PerceptionFrame |
 
     const pastRoute = localRoute.filter((point) => point.forward <= 0.8);
     const futureRoute = localRoute.filter((point) => point.forward >= -0.4);
-    drawPolyline(pastRoute, "rgba(107, 164, 166, 0.34)", 7);
-    drawPolyline(futureRoute, "rgba(84, 211, 240, 0.18)", 11, 10);
-    drawPolyline(futureRoute, "#47d9ff", 3.6, 12);
-    drawPolyline(futureRoute, "rgba(240, 255, 241, 0.78)", 1.2, 0, [10, 13]);
+    drawPolyline(pastRoute, "rgba(82, 122, 115, 0.25)", 7);
+    drawPolyline(futureRoute, "rgba(105, 160, 149, 0.19)", 11, 4);
+    drawPolyline(futureRoute, "#4e9388", 3.2, 6);
+    drawPolyline(futureRoute, "rgba(250, 255, 248, 0.84)", 1.1, 0, [10, 13]);
 
     current.objects.forEach((object) => {
-      if (object.x < -view.rear || object.x > view.front || Math.abs(object.y) > view.side) {
+      if (
+        object.x < visibleBounds.minForward ||
+        object.x > visibleBounds.maxForward ||
+        object.y < visibleBounds.minLeft ||
+        object.y > visibleBounds.maxLeft
+      ) {
         return;
       }
       const point = toCanvas(object.x, object.y);
-      const color = object.risk === "high" ? "#ff5c4a" : object.risk === "medium" ? "#ffd45a" : "#63f2d8";
+      const color = object.risk === "high" ? "#f05a91" : object.risk === "medium" ? "#d9a83d" : "#4f9188";
       const size = object.risk === "low" ? 4 : 5.5;
       ctx.save();
       ctx.fillStyle = color;
@@ -566,43 +736,108 @@ function useMapCanvas(frames: PerceptionFrame[], currentFrame: PerceptionFrame |
       ctx.fill();
       if (object.risk !== "low") {
         ctx.shadowBlur = 0;
-        ctx.fillStyle = "rgba(238, 249, 244, 0.84)";
+        ctx.fillStyle = "rgba(29, 59, 55, 0.88)";
         ctx.font = "11px Inter, sans-serif";
         ctx.fillText(object.label, point.x + 8, point.y - 7);
       }
       ctx.restore();
     });
 
-    ctx.save();
-    ctx.shadowColor = "#d9ff63";
-    ctx.shadowBlur = 16;
-    ctx.fillStyle = "rgba(217, 255, 99, 0.95)";
-    ctx.strokeStyle = "rgba(4, 8, 6, 0.94)";
-    ctx.lineWidth = 2.2;
-    ctx.beginPath();
-    ctx.roundRect(egoCanvas.x - 10, egoCanvas.y - 25, 20, 38, 5);
-    ctx.fill();
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = "#f2ffbd";
-    ctx.beginPath();
-    ctx.moveTo(egoCanvas.x, egoCanvas.y - 33);
-    ctx.lineTo(egoCanvas.x - 11, egoCanvas.y - 15);
-    ctx.lineTo(egoCanvas.x + 11, egoCanvas.y - 15);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
+    drawEgoCar(ctx, egoCanvas.x, egoCanvas.y - 4, 1.1);
 
     ctx.save();
-    ctx.fillStyle = "rgba(232, 246, 245, 0.82)";
+    ctx.fillStyle = "rgba(32, 68, 63, 0.88)";
     ctx.font = "12px Inter, sans-serif";
     ctx.fillText("局部道路跟随 / 车头朝上", panel.x + 12, panel.y + 22);
-    ctx.fillStyle = "rgba(157, 218, 225, 0.74)";
-    ctx.fillText(`前方 ${view.front}m`, panel.x + panel.width - 72, panel.y + 22);
+    ctx.fillStyle = "rgba(62, 104, 97, 0.72)";
+    ctx.fillText(`前方 ${Math.max(0, Math.round(visibleBounds.maxForward))}m`, panel.x + panel.width - 72, panel.y + 22);
     ctx.restore();
     ctx.restore();
-  }, [canvasRef, currentFrame, frames]);
+
+    // Persistent scene overview: the complete path remains visible as the ego car advances.
+    const overview = { x: panel.x + 12, y: panel.y + 34, width: Math.min(150, panel.width * .36), height: Math.min(108, panel.height * .34) };
+    const xs = frames.map((item) => item.ego.x);
+    const ys = frames.map((item) => item.ego.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    const range = Math.max(maxX - minX, maxY - minY, 1);
+    const overviewPoint = (item: PerceptionFrame) => ({
+      x: overview.x + 10 + ((item.ego.x - minX) / range) * (overview.width - 20),
+      y: overview.y + overview.height - 10 - ((item.ego.y - minY) / range) * (overview.height - 20),
+    });
+    ctx.save();
+    ctx.fillStyle = "rgba(249, 252, 249, .86)";
+    ctx.strokeStyle = "rgba(111, 151, 139, .30)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.roundRect(overview.x, overview.y, overview.width, overview.height, 7); ctx.fill(); ctx.stroke();
+    ctx.font = "10px Inter, sans-serif";
+    ctx.fillStyle = "rgba(48, 85, 78, .78)";
+    ctx.fillText("SCENE TRAIL · PERSISTENT", overview.x + 9, overview.y + 15);
+    ctx.beginPath();
+    frames.forEach((item, index) => {
+      const p = overviewPoint(item);
+      if (index === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+    });
+    ctx.strokeStyle = "rgba(78, 147, 136, .45)"; ctx.lineWidth = 2.2; ctx.stroke();
+    if (highlightedRiskEvent) {
+      const riskSegment = frames.filter((item) => item.time >= highlightedRiskEvent.startTime && item.time <= highlightedRiskEvent.endTime);
+      if (riskSegment.length > 0) {
+        ctx.beginPath();
+        riskSegment.forEach((item, index) => {
+          const point = overviewPoint(item);
+          if (index === 0) ctx.moveTo(point.x, point.y); else ctx.lineTo(point.x, point.y);
+        });
+        ctx.strokeStyle = highlightedRiskEvent.risk === "high" ? "#f05a91" : "#d9a83d";
+        ctx.lineWidth = 4; ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 9; ctx.stroke();
+      }
+    }
+    const traveled = frames.slice(0, currentIndex + 1);
+    ctx.beginPath(); traveled.forEach((item, index) => { const p = overviewPoint(item); if (index === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+    ctx.strokeStyle = "#f05a91"; ctx.lineWidth = 2.8; ctx.shadowColor = "#f05a91"; ctx.shadowBlur = 8; ctx.stroke();
+    const marker = overviewPoint(current);
+    ctx.fillStyle = "#f05a91"; ctx.beginPath(); ctx.arc(marker.x, marker.y, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }, [canvasRef, currentFrame, frames, highlightedRiskEvent, viewport]);
+}
+
+function ProjectSite({ onOpenDemo }: { onOpenDemo: () => void }) {
+  const navItems = [["项目缘起", "#origin"], ["安全命题", "#context"], ["产品体系", "#product"], ["效果展示", "#demo"]];
+  return <main className="showcase">
+    <section className="showcase-hero" id="home">
+      <video className="hero-video" src="/sample.mp4" autoPlay muted loop playsInline />
+      <div className="hero-wash" />
+      <nav className="showcase-nav">
+        <a className="brand" href="#home"><span className="brand-mark"><Shield size={18} /></span><span>智驾卫士</span><small>DRIVEGUARD</small></a>
+        <div className="nav-links">{navItems.map(([label, href]) => <a href={href} key={href}>{label}</a>)}</div>
+        <a className="contact-link" href="mailto:23050824@hdu.edu.cn">联系我们 <ArrowUpRight size={15} /></a>
+      </nav>
+      <div className="hero-content content-width">
+        <p className="kicker"><span /> EXPLAINABLE AUTONOMY · 01</p>
+        <h1>让每一次<br /><em>自动驾驶决策</em>有据可循</h1>
+        <p className="hero-copy">面向智能驾驶研发、测试验证与安全审计的多智能体协作诊断平台。将不可见的失效路径，转化为可追溯、可复现、可优化的证据闭环。</p>
+        <div className="hero-actions"><button className="primary-cta" type="button" onClick={onOpenDemo}>进入效果展示 <ArrowDownRight size={18} /></button><a className="text-cta" href="#product">了解系统架构 <ArrowUpRight size={17} /></a></div>
+      </div>
+      <div className="hero-foot content-width"><span>HANGZHOU DIANZI UNIVERSITY</span><span>2026 / RESEARCH PROTOTYPE</span><span>SCROLL TO EXPLORE ↓</span></div>
+    </section>
+
+    <section className="intro-section content-width" id="origin">
+      <div className="section-index">01 / WHY NOW</div>
+      <div className="intro-grid"><h2>从“能跑”到<br />“<em>说得清</em>为什么这样跑”</h2><div className="intro-copy"><p>智能驾驶正从功能验证迈向规模化应用。真正的安全，不止是识别一个目标，更在于能够还原关键时刻的感知、决策与控制链路。</p><p>智驾卫士将事故复盘从依赖经验的手工劳动，变成由多智能体协同完成的结构化诊断。</p></div></div>
+      <div className="proof-strip"><span><b>非侵入</b>接入</span><span><b>跨层</b>归因</span><span><b>闭环</b>优化</span><span><b>可审计</b>交付</span></div>
+    </section>
+
+    <section className="policy-section" id="context"><div className="content-width">
+      <div className="section-index">02 / THE CONTEXT</div><div className="context-head"><h2>安全监管正在要求<br /><em>过程可信</em></h2><p>从智能网联汽车准入与上路通行试点，到“车路云一体化”应用试点，行业评价标准正由单一功能表现，转向运行边界、关键决策与安全响应的可验证能力。</p></div>
+      <div className="policy-grid"><article><span>2020</span><h3>智能汽车创新发展战略</h3><p>智能汽车体系建设进入国家战略视野。</p></article><article><span>2023</span><h3>准入与上路通行试点</h3><p>L3/L4 产品在限定区域开展验证与试点。</p></article><article><span>2024</span><h3>车路云一体化应用试点</h3><p>以数据处理与安全保障加快规模化落地。</p></article></div>
+    </div></section>
+
+    <section className="pain-section content-width"><div className="section-index">03 / THE GAP</div><div className="pain-header"><h2>复杂系统的失效，<br />不该只得到一句<em>“未识别”</em></h2><p>在长尾场景里，感知偏差、决策误判和控制策略会发生级联放大。现有“人工日志回放 + 规则匹配”的方式，很难回答根因，也难以沉淀为下一次的修复路径。</p></div><div className="pain-grid"><article><b>01</b><h3>数据孤岛</h3><p>多源数据分散在传感器、模型特征与控制链路中，难以时空对齐。</p></article><article><b>02</b><h3>黑箱归因</h3><p>系统只留下结果，研发人员无法定位“为什么在此刻做出这个决策”。</p></article><article><b>03</b><h3>被动修复</h3><p>海量正常日志淹没高价值失效样本，模型迭代仍依赖经验与猜测。</p></article></div></section>
+
+    <section className="product-section" id="product"><div className="content-width"><div className="product-top"><div><div className="section-index">04 / OUR ANSWER</div><h2>把每一次异常<br />沉淀为下一次<em>进化</em></h2></div><p>以标准化协议连接数据，以协同智能体组织证据，以自动化闭环推动模型优化。</p></div><div className="architecture-card"><div className="architecture-title"><Sparkles size={18} /> 多智能体协作诊断引擎 <span>DIAGNOSIS ORCHESTRATION</span></div><div className="agent-flow"><div className="agent-node"><Database /><small>01</small><h3>协议接入</h3><p>非侵入式汇集多模态数据流</p></div><i /><div className="agent-node active"><BrainCircuit /><small>02</small><h3>诊断编排</h3><p>动态调度感知与决策分析</p></div><i /><div className="agent-node"><FileSearch /><small>03</small><h3>证据解码</h3><p>量化偏差，审计逻辑链</p></div><i /><div className="agent-node"><ShieldCheck /><small>04</small><h3>闭环优化</h3><p>产出高价值修复数据包</p></div></div></div><div className="feature-grid"><article><CircleCheck size={19} /><h3>算法结构描述协议</h3><p>不触碰模型权重，兼顾接入深度、数据主权与跨架构适配。</p></article><article><CircleCheck size={19} /><h3>数学 + 逻辑双重证据</h3><p>连接感知语义漂移与决策逻辑审计，让诊断结论可验证。</p></article><article><CircleCheck size={19} /><h3>诊断即训练</h3><p>从失效根因反向生成正确/错误推理对，驱动针对性迭代。</p></article></div></div></section>
+
+    <section className="demo-section" id="demo"><div className="content-width"><div className="demo-head"><div><div className="section-index">05 / LIVE PROTOTYPE</div><h2>让证据，<em>看得见</em></h2></div><p>当前效果展示基于 nuScenes 真实连续场景：视频、目标感知、BEV、局部轨迹与 AI 风险诊断在同一时间轴联动。完整工程平台仍在持续建设。</p></div><div className="demo-card"><div className="demo-card-top"><span><i /> DRIVEGUARD / LIVE DEMO</span><span>nuScenes mini · CAM_FRONT</span></div><div className="demo-visual"><video src="/sample.mp4" autoPlay muted loop playsInline /><div className="demo-overlay"><span>前视相机 · 实时目标感知</span><b>风险诊断<br />驾驶舱</b><div className="demo-metrics"><span>12.4 km/h</span><span>BEV 14 objects</span><span>LOW RISK</span></div></div><div className="mini-map"><Map size={18}/><i/><i/><i/><b /></div></div><div className="demo-card-bottom"><p>这是当前可运行的工程 Demo。点击进入后，可查看真实感知框、历史风险事件、多场景数据入口与可交互地图。</p><button type="button" onClick={onOpenDemo}>打开驾驶舱 <ArrowUpRight size={17}/></button></div></div></div></section>
+
+    <footer className="showcase-footer" id="contact"><div className="content-width"><p className="kicker"><span /> LET'S MAKE AUTONOMY ACCOUNTABLE</p><h2>安全不是一句承诺。<br /><em>它应当被证明。</em></h2><a href="mailto:23050824@hdu.edu.cn">23050824@hdu.edu.cn <ArrowUpRight /></a><div className="footer-bottom"><span>智驾卫士 / DRIVEGUARD</span><span>杭州电子科技大学 · 计算机学院</span><span>© 2026</span></div></div></footer>
+  </main>;
 }
 
 function App() {
@@ -610,8 +845,8 @@ function App() {
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const animationFrameRef = useRef<number | null>(null);
-  const bevCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const mapCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const mapDragStartRef = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null);
   const [telemetry, setTelemetry] = useState<TelemetryFrame[]>([]);
   const [perception, setPerception] = useState<PerceptionFrame[]>([]);
   const [currentTime, setCurrentTime] = useState(0);
@@ -619,9 +854,20 @@ function App() {
   const [diagnosing, setDiagnosing] = useState(false);
   const [diagnosis, setDiagnosis] = useState<DiagnosisResult | null>(null);
   const [datasetMeta, setDatasetMeta] = useState<DatasetMeta | null>(null);
+  const [scenes, setScenes] = useState<SceneManifestEntry[]>([LEGACY_SCENE]);
+  const [selectedSceneId, setSelectedSceneId] = useState(LEGACY_SCENE.id);
+  const [sceneLoading, setSceneLoading] = useState(true);
   const [diagnosisMode, setDiagnosisMode] = useState<DiagnosisMode>("unknown");
   const [backendModel, setBackendModel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [mapViewport, setMapViewport] = useState<MapViewport>(DEFAULT_MAP_VIEWPORT);
+  const [showDashboard, setShowDashboard] = useState(false);
+  const [lidarIndex, setLidarIndex] = useState<LidarIndex | null>(null);
+  const [lidarStatus, setLidarStatus] = useState<"loading" | "unavailable" | "ready" | "error">("loading");
+  const [lidarCache] = useState(() => new LidarFrameCache());
+  const [currentPointCloud, setCurrentPointCloud] = useState<Float32Array | null>(null);
+  const [lidarHistory, setLidarHistory] = useState<Float32Array[]>([]);
+  const [selectedRiskEventId, setSelectedRiskEventId] = useState<string | null>(null);
 
   const currentFrame = useMemo(() => findNearestFrame(telemetry, currentTime), [telemetry, currentTime]);
   const currentPerception = useMemo(() => findNearestFrame(perception, currentTime), [perception, currentTime]);
@@ -647,9 +893,57 @@ function App() {
   const sampleCount = datasetMeta?.sampleCount ?? telemetry.length;
   const fps = datasetMeta?.videoFps ?? datasetMeta?.fps ?? 24;
   const telemetryFps = datasetMeta?.telemetryFps ?? 12;
+  const selectedScene = scenes.find((scene) => scene.id === selectedSceneId) ?? LEGACY_SCENE;
+  const riskEvents = useMemo(() => deriveRiskEvents(telemetry, perception), [telemetry, perception]);
+  const completedRiskEvents = useMemo(
+    () => riskEvents.filter((event) => event.endTime <= currentTime + 0.05),
+    [currentTime, riskEvents],
+  );
+  const highlightedRiskEvent = useMemo(
+    () => riskEvents.find((event) => event.id === selectedRiskEventId)
+      ?? riskEvents.find((event) => currentTime >= event.startTime && currentTime <= event.endTime)
+      ?? null,
+    [currentTime, riskEvents, selectedRiskEventId],
+  );
+  const currentLidarFrame = useMemo(
+    () => lidarIndex ? findNearestLidarFrame(lidarIndex, currentTime) : null,
+    [currentTime, lidarIndex],
+  );
 
-  useBevCanvas(currentPerception, bevCanvasRef);
-  useMapCanvas(perception, currentPerception, mapCanvasRef);
+  useMapCanvas(perception, currentPerception, mapCanvasRef, mapViewport, highlightedRiskEvent);
+
+  const updateMapZoom = useCallback((factor: number) => {
+    setMapViewport((viewport) => ({ ...viewport, zoom: clampMapZoom(viewport.zoom * factor) }));
+  }, []);
+
+  const resetMapViewport = useCallback(() => setMapViewport(DEFAULT_MAP_VIEWPORT), []);
+
+  const handleMapPointerDown = useCallback((event: PointerEvent<HTMLCanvasElement>) => {
+    const canvas = mapCanvasRef.current;
+    if (!canvas) return;
+    canvas.setPointerCapture(event.pointerId);
+    mapDragStartRef.current = { x: event.clientX, y: event.clientY, offsetX: mapViewport.offsetX, offsetY: mapViewport.offsetY };
+  }, [mapViewport.offsetX, mapViewport.offsetY]);
+
+  const handleMapPointerMove = useCallback((event: PointerEvent<HTMLCanvasElement>) => {
+    const dragStart = mapDragStartRef.current;
+    if (!dragStart) return;
+    setMapViewport((viewport) => ({
+      ...viewport,
+      offsetX: Math.max(-360, Math.min(360, dragStart.offsetX + event.clientX - dragStart.x)),
+      offsetY: Math.max(-360, Math.min(360, dragStart.offsetY + event.clientY - dragStart.y)),
+    }));
+  }, []);
+
+  const handleMapPointerEnd = useCallback((event: PointerEvent<HTMLCanvasElement>) => {
+    mapDragStartRef.current = null;
+    if (mapCanvasRef.current?.hasPointerCapture(event.pointerId)) mapCanvasRef.current.releasePointerCapture(event.pointerId);
+  }, []);
+
+  const handleMapWheel = useCallback((event: WheelEvent<HTMLCanvasElement>) => {
+    event.preventDefault();
+    updateMapZoom(event.deltaY < 0 ? 1.12 : 1 / 1.12);
+  }, [updateMapZoom]);
 
   const connectSocket = useCallback(() => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
@@ -702,40 +996,113 @@ function App() {
   }, []);
 
   useEffect(() => {
-    fetch("/telemetry.json")
+    let active = true;
+    fetch("/scenes.json")
       .then((response) => {
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
-        return response.json();
+        return response.json() as Promise<SceneManifest>;
       })
-      .then((data: TelemetryFrame[]) => setTelemetry(data))
-      .catch((fetchError) => setError(`读取 telemetry.json 失败：${fetchError}`));
+      .then((manifest) => {
+        if (!active || !manifest.scenes?.length) {
+          return;
+        }
+        setScenes(manifest.scenes);
+        setSelectedSceneId(manifest.defaultSceneId && manifest.scenes.some((scene) => scene.id === manifest.defaultSceneId)
+          ? manifest.defaultSceneId
+          : manifest.scenes[0].id);
+      })
+      // The original single-file demo remains usable when a manifest is absent.
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
-    fetch("/perception.json")
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        return response.json();
+    const controller = new AbortController();
+    const lidarSource = resolveLidarSource(selectedScene);
+    setSceneLoading(true);
+    setDiagnosis(null);
+    setError(null);
+    setCurrentTime(0);
+    setSelectedRiskEventId(null);
+    lidarCache.clear();
+    setLidarIndex(null);
+    setCurrentPointCloud(null);
+    setLidarHistory([]);
+    setLidarStatus(lidarSource ? "loading" : "unavailable");
+
+    Promise.all([
+      fetch(selectedScene.telemetryFile, { signal: controller.signal }).then((response) => {
+        if (!response.ok) throw new Error(`telemetry HTTP ${response.status}`);
+        return response.json() as Promise<TelemetryFrame[]>;
+      }),
+      fetch(selectedScene.perceptionFile, { signal: controller.signal }).then((response) => {
+        if (!response.ok) throw new Error(`perception HTTP ${response.status}`);
+        return response.json() as Promise<PerceptionFrame[]>;
+      }),
+      selectedScene.metadataFile
+        ? fetch(selectedScene.metadataFile, { signal: controller.signal }).then((response) => (response.ok ? response.json() as Promise<DatasetMeta> : null))
+        : Promise.resolve(null),
+      lidarSource ? loadLidarIndex(lidarSource, controller.signal) : Promise.resolve(null),
+    ])
+      .then(([nextTelemetry, nextPerception, nextMeta, nextLidarIndex]) => {
+        if (controller.signal.aborted) return;
+        setTelemetry(nextTelemetry);
+        setPerception(nextPerception);
+        setDatasetMeta(nextMeta);
+        setLidarIndex(nextLidarIndex);
+        if (lidarSource) setLidarStatus("ready");
+        videoRef.current?.load();
       })
-      .then((data: PerceptionFrame[]) => setPerception(data))
-      .catch(() => setPerception([]));
-  }, []);
+      .catch((fetchError: unknown) => {
+        if (!controller.signal.aborted) {
+          setTelemetry([]);
+          setPerception([]);
+          setDatasetMeta(null);
+          setLidarIndex(null);
+          setLidarStatus(lidarSource ? "error" : "unavailable");
+          setError(`读取场景“${selectedScene.label}”失败：${fetchError instanceof Error ? fetchError.message : String(fetchError)}`);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setSceneLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [selectedScene]);
 
   useEffect(() => {
-    fetch("/dataset-meta.json")
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        return response.json();
+    const lidarSource = resolveLidarSource(selectedScene);
+    if (!lidarIndex || !lidarSource || lidarIndex.frames.length === 0) {
+      if (lidarSource && lidarIndex && lidarIndex.frames.length === 0) setLidarStatus("error");
+      return;
+    }
+    const current = findNearestLidarFrame(lidarIndex, currentTime);
+    if (!current) return;
+    const controller = new AbortController();
+    const currentIndex = lidarIndex.frames.indexOf(current);
+    const frames = lidarIndex.frames.slice(Math.max(0, currentIndex - 2), currentIndex + 1);
+    setLidarStatus("loading");
+    Promise.all(frames.map((frame) => lidarCache.load(resolveLidarFrameUrl(lidarSource, frame.file), controller.signal)))
+      .then((clouds) => {
+        if (controller.signal.aborted) return;
+        setCurrentPointCloud(clouds.at(-1) ?? null);
+        setLidarHistory(clouds.slice(0, -1));
+        setLidarStatus("ready");
       })
-      .then((data: DatasetMeta) => setDatasetMeta(data))
-      .catch(() => setDatasetMeta(null));
-  }, []);
+      .catch((loadError: unknown) => {
+        if (!controller.signal.aborted) {
+          setCurrentPointCloud(null);
+          setLidarHistory([]);
+          setLidarStatus("error");
+          setError(`读取 LiDAR 点云失败：${loadError instanceof Error ? loadError.message : String(loadError)}`);
+        }
+      });
+    return () => controller.abort();
+  }, [currentTime, lidarCache, lidarIndex, selectedScene]);
 
   useEffect(() => {
     let active = true;
@@ -823,6 +1190,17 @@ function App() {
     );
   };
 
+  const handleSeekRiskEvent = (time: number, event?: RiskEvent) => {
+    const replayTime = resolveReplayTime(event ?? { seekTime: time });
+    const video = videoRef.current;
+    if (video) {
+      video.currentTime = replayTime;
+      void video.play().catch(() => undefined);
+    }
+    setCurrentTime(replayTime);
+    setSelectedRiskEventId(event?.id ?? null);
+  };
+
   const metricItems = [
     { label: "车速", value: `${formatNumber(currentFrame?.speedKmh ?? NaN)} km/h`, icon: Gauge },
     { label: "刹车", value: formatNumber(currentFrame?.brake ?? NaN, 2), icon: ShieldCheck },
@@ -831,6 +1209,10 @@ function App() {
     { label: "加速度", value: `${formatNumber(currentFrame?.accel ?? NaN, 2)} m/s²`, icon: Radio },
     { label: "目标", value: `${currentPerception?.objects.length ?? 0}`, icon: Layers3 },
   ];
+
+  if (!showDashboard) {
+    return <ProjectSite onOpenDemo={() => setShowDashboard(true)} />;
+  }
 
   return (
     <main className="app-shell">
@@ -841,6 +1223,20 @@ function App() {
             <h1>智驾感知诊断驾驶舱</h1>
           </div>
           <div className="header-actions">
+            <button className="back-site-button" type="button" onClick={() => setShowDashboard(false)}>项目官网</button>
+            <label className="scene-selector" title="切换后会同步加载该场景的视频、车辆状态与感知数据">
+              <Database size={15} aria-hidden="true" />
+              <span>场景</span>
+              <select
+                value={selectedSceneId}
+                onChange={(event) => setSelectedSceneId(event.target.value)}
+                disabled={sceneLoading}
+                aria-label="选择数据场景"
+              >
+                {scenes.map((scene) => <option value={scene.id} key={scene.id}>{scene.label}</option>)}
+              </select>
+              <ChevronDown size={14} aria-hidden="true" />
+            </label>
             <span className={`status-dot status-${connectionStatus}`}>{statusText[connectionStatus]}</span>
             <span className={`risk-pill risk-${panelRisk}`}>{riskText[panelRisk]}</span>
           </div>
@@ -855,7 +1251,8 @@ function App() {
           <div className="video-frame">
             <video
               ref={videoRef}
-              src="/sample.mp4"
+              key={selectedScene.id}
+              src={selectedScene.videoFile}
               controls
               autoPlay
               muted
@@ -869,7 +1266,7 @@ function App() {
             <div className="video-hud">
               <span>VIDEO {formatNumber(fps, 0)} FPS</span>
               <span>FRAME {currentPerception ? perception.indexOf(currentPerception) + 1 : "--"}/{sampleCount ?? telemetry.length}</span>
-              <span>{sceneName}</span>
+              <span>{sceneLoading ? "场景加载中…" : sceneName}</span>
             </div>
             <div className="video-reticle" aria-hidden="true" />
             <div className="camera-targets">
@@ -964,11 +1361,15 @@ function App() {
         <section className="bev-panel">
           <div className="panel-title">
             <Layers3 size={18} aria-hidden="true" />
-            <span>3D/BEV 感知</span>
+            <span>LiDAR 3D/BEV 感知</span>
             <strong>高危 {highRiskObjects} / 中危 {mediumRiskObjects}</strong>
           </div>
-          <div className="canvas-stage">
-            <canvas ref={bevCanvasRef} />
+          <LidarBev pointCloud={currentPointCloud} frame={currentPerception} history={lidarHistory} status={lidarStatus} />
+          <div className="lidar-metadata" aria-label="LiDAR 数据状态">
+            <span>源 {resolveLidarSource(selectedScene) ?? "camera-only"}</span>
+            <span>点 {currentLidarFrame?.pointCount.toLocaleString() ?? "--"}</span>
+            <span>关键帧 {currentLidarFrame ? `${formatNumber(currentLidarFrame.time, 2)}s` : "--"}</span>
+            <span className={`lidar-status lidar-status-${lidarStatus}`}>{lidarStatus === "ready" ? "已同步" : lidarStatus === "loading" ? "加载中" : lidarStatus === "unavailable" ? "仅相机" : "读取失败"}</span>
           </div>
         </section>
 
@@ -979,7 +1380,30 @@ function App() {
             <strong>{currentPerception ? `${formatNumber(currentPerception.ego.latitude, 5)}, ${formatNumber(currentPerception.ego.longitude, 5)}` : "--"}</strong>
           </div>
           <div className="canvas-stage map-stage">
-            <canvas ref={mapCanvasRef} />
+            <canvas
+              ref={mapCanvasRef}
+              className="interactive-map-canvas"
+              onPointerDown={handleMapPointerDown}
+              onPointerMove={handleMapPointerMove}
+              onPointerUp={handleMapPointerEnd}
+              onPointerCancel={handleMapPointerEnd}
+              onWheel={handleMapWheel}
+              aria-label="可缩放和平移的局部地图"
+            />
+            <div className="map-controls" aria-label="地图控制">
+              <button type="button" onClick={() => updateMapZoom(1.2)} title="放大地图" aria-label="放大地图">
+                <Plus size={16} aria-hidden="true" />
+              </button>
+              <button type="button" onClick={() => updateMapZoom(1 / 1.2)} title="缩小地图" aria-label="缩小地图">
+                <Minus size={16} aria-hidden="true" />
+              </button>
+              <button type="button" onClick={resetMapViewport} title="回到自车当前位置" aria-label="回到自车当前位置">
+                <LocateFixed size={16} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="map-interaction-hint">
+              <Move size={13} aria-hidden="true" /> 拖拽平移 · 滚轮缩放
+            </div>
           </div>
           <div className="metadata-strip">
             <span title={sceneName}>
@@ -1000,6 +1424,8 @@ function App() {
             </span>
           </div>
         </section>
+
+        <RiskEventsPanel events={completedRiskEvents} currentTime={currentTime} onSeek={handleSeekRiskEvent} />
       </section>
     </main>
   );

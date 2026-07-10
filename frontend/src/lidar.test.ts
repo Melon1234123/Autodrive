@@ -23,7 +23,11 @@ describe("LiDAR data helpers", () => {
     expect([...decodePointCloud(bytes)]).toEqual([1, 2, 3, 0.5]);
   });
 
-  it("keeps only the six most recently used decoded frames", async () => {
+  it("rejects buffers that do not contain complete xyzI points", () => {
+    expect(() => decodePointCloud(new ArrayBuffer(12))).toThrow("Invalid xyzI point cloud buffer");
+  });
+
+  it("keeps only the two most recently used decoded frames", async () => {
     const fetchFrame = vi.fn(async (url: string) => {
       const point = Number(url.replace("frame-", ""));
       return new Response(new Float32Array([point, 0, 0, 1]).buffer);

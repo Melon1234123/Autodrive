@@ -1,3 +1,4 @@
+import MotionHeadline from "./MotionHeadline";
 import ShowcaseArchiveDeck, { type ShowcaseArchiveItem } from "./ShowcaseArchiveDeck";
 import "./TechnicalRouteSection.css";
 
@@ -30,12 +31,16 @@ const routeItems: ShowcaseArchiveItem[] = [
 
 export default function TechnicalRouteSection() {
   return (
-    <section className="pain-section route-section" data-terrain-preset="route" id="route">
+    <section className="pain-section route-section" data-motion-section data-terrain-preset="route" id="route">
       <div className="content-width">
-        <div className="section-index">03 / TECHNICAL ROUTE</div>
+        <div className="section-index" data-motion-index>03 / TECHNICAL ROUTE</div>
         <div className="pain-header">
-          <h2>把故障诊断拆成<br />四个<em>可审计</em>环节</h2>
-          <p>技术路线不是简单展示结果，而是把数据如何进入、偏差如何量化、决策如何解释、修复数据如何生成全部结构化。</p>
+          <MotionHeadline
+            as="h2"
+            label="把故障诊断拆成四个可审计环节"
+            lines={[<>把故障诊断拆成</>, <>四个<em>可审计</em>环节</>]}
+          />
+          <p data-motion-copy>技术路线不是简单展示结果，而是把数据如何进入、偏差如何量化、决策如何解释、修复数据如何生成全部结构化。</p>
         </div>
         <ShowcaseArchiveDeck ariaLabel="技术路线四个环节" className="route-archive-deck" items={routeItems} />
       </div>

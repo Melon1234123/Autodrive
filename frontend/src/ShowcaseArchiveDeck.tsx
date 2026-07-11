@@ -49,7 +49,7 @@ export default function ShowcaseArchiveDeck({
   const [activeId, setActiveId] = useState<ArchiveCardId>(defaultActiveId);
 
   return (
-    <div className={`archive-deck ${className}`.trim()} role="group" aria-label={ariaLabel}>
+    <div className={`archive-deck ${className}`.trim()} data-motion-stagger role="group" aria-label={ariaLabel}>
       {items.map((item) => {
         const active = item.id === activeId;
         const colors = palette[item.id];

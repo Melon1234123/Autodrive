@@ -22,6 +22,7 @@ describe("ShowcaseArchiveDeck", () => {
     expect(cards[0]).toHaveAttribute("aria-pressed", "false");
     expect(cards[1]).toHaveAttribute("aria-pressed", "true");
     expect(group.querySelectorAll(".archive-number-mask")).toHaveLength(4);
+    expect(group).toHaveAttribute("data-motion-stagger");
   });
 
   it("keeps exactly one card active and does not collapse the active card", () => {

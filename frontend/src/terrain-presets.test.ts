@@ -32,7 +32,7 @@ describe("terrain presets", () => {
       hidden: { colors: ["#F3F4E8", "#DCE9DC", "#AECBB5", "#6F9F82"], lineColor: "#3F705D", opacity: 0, speed: 0.052, contourDensity: 17, lineStrength: 0.22 },
       positioning: { colors: ["#F3F4E8", "#DCE9DC", "#AECBB5", "#6F9F82"], lineColor: "#3F705D", opacity: 1, speed: 0.052, contourDensity: 17, lineStrength: 0.22 },
       pain: { colors: ["#102E27", "#255B45", "#76A88B", "#D3E5D6"], lineColor: "#A7CAB2", opacity: 1, speed: 0.046, contourDensity: 19, lineStrength: 0.25 },
-      route: { colors: ["#E6EFE6", "#D7E7D8", "#A8C8B0", "#3E725C"], lineColor: "#4C7E68", opacity: 1, speed: 0.05, contourDensity: 20, lineStrength: 0.24 },
+      route: { colors: ["#E6EFE6", "#D7E7D8", "#A8C8B0", "#3E725C"], lineColor: "#4C7E68", opacity: 1, speed: 0.05, contourDensity: 20, lineStrength: 0.27 },
       demo: { colors: ["#D8E6DE", "#C8DDD0", "#7FA98E", "#234F40"], lineColor: "#5E8D76", opacity: 1, speed: 0.044, contourDensity: 18, lineStrength: 0.21 },
       product: { colors: ["#BFD4C3", "#DDE8DC", "#81AC91", "#285C48"], lineColor: "#315F4B", opacity: 1, speed: 0.048, contourDensity: 19, lineStrength: 0.24 },
       closing: { colors: ["#102E27", "#1E513F", "#6D9E82", "#C5DECB"], lineColor: "#A5C8B1", opacity: 1, speed: 0.038, contourDensity: 18, lineStrength: 0.22 },

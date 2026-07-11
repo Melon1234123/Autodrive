@@ -882,6 +882,8 @@ button:focus-visible {
   outline:2px solid var(--float-glow);
   outline-offset:3px;
 }
+button { transition:box-shadow .24s ease; }
+button:focus-visible { box-shadow:0 0 22px var(--float-glow); }
 
 .risk-event-high.is-active { box-shadow:inset 4px 0 #e96c5e,-10px -10px 24px var(--float-highlight),14px 16px 34px var(--float-shadow); }
 .risk-event-medium.is-active { box-shadow:inset 4px 0 #d6a93d,-10px -10px 24px var(--float-highlight),14px 16px 34px var(--float-shadow); }
@@ -894,7 +896,8 @@ button:focus-visible {
   .feature-grid article,
   .agent-node,
   .metric-card,
-  .risk-event { transition:none; translate:none !important; }
+  .risk-event,
+  button { transition:none; translate:none !important; }
 
   .showcase-card::after,
   .proof-strip article::after,

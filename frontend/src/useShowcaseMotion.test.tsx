@@ -6,13 +6,15 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const motionMocks = vi.hoisted(() => {
   const timelineOptions: Array<Record<string, unknown>> = [];
+  const timelineTargets: unknown[] = [];
   const makeTimeline = (options: Record<string, unknown> = {}) => {
     timelineOptions.push(options);
     const chain = {
       fromTo: vi.fn(),
       set: vi.fn(),
     };
-    chain.fromTo.mockImplementation(() => {
+    chain.fromTo.mockImplementation((targets: unknown) => {
+      timelineTargets.push(targets);
       if (motionMocks.throwOnTween) throw new Error("tween init failed");
       return chain;
     });
@@ -42,6 +44,7 @@ const motionMocks = vi.hoisted(() => {
     gsapFromTo: vi.fn(),
     makeTimeline,
     timelineOptions,
+    timelineTargets,
     tickerAdd: vi.fn(),
     tickerRemove: vi.fn(),
     scrollUpdate: vi.fn(),
@@ -143,6 +146,12 @@ function Harness({
               visibility: "hidden",
             } : undefined}
           />
+          <div data-motion-stagger>
+            <span
+              data-motion-stagger-item
+              style={seedHiddenStyles ? { clipPath: "inset(100% 0 0 0)", willChange: "clip-path" } : undefined}
+            >Footer item</span>
+          </div>
         </section>
         <section id="product" />
       </div>
@@ -161,6 +170,7 @@ function openingCompletions() {
 beforeEach(() => {
   vi.clearAllMocks();
   motionMocks.timelineOptions.length = 0;
+  motionMocks.timelineTargets.length = 0;
   motionMocks.throwOnContext = false;
   motionMocks.throwOnTween = false;
   vi.stubGlobal("requestAnimationFrame", vi.fn(() => 17));
@@ -225,6 +235,7 @@ it("creates one root-scoped synchronized runtime, handles anchors, and cleans up
   const view = render(<Harness onOpeningComplete={complete} />);
   const root = view.container.querySelector("main") as HTMLElement;
   const content = root.querySelector("[data-lenis-content]");
+  const staggerItem = root.querySelector("[data-motion-stagger-item]");
 
   expect(motionMocks.lenisConstruct).toHaveBeenCalledTimes(1);
   expect(motionMocks.lenisConstruct).toHaveBeenCalledWith(expect.objectContaining({
@@ -234,6 +245,7 @@ it("creates one root-scoped synchronized runtime, handles anchors, and cleans up
   }));
   expect(motionMocks.lenisOn).toHaveBeenCalledWith("scroll", motionMocks.scrollUpdate);
   expect(motionMocks.gsapContext).toHaveBeenCalledWith(expect.any(Function), root);
+  expect(motionMocks.timelineTargets.some((targets) => Array.isArray(targets) && targets.includes(staggerItem))).toBe(true);
   expect(motionMocks.lenisStop).toHaveBeenCalledTimes(1);
   expect(motionMocks.tickerAdd).toHaveBeenCalledTimes(1);
 
@@ -298,11 +310,14 @@ it("falls back visibly and releases only its resources when initialization throw
 
   const fallbackRoot = view!.container.querySelector("main") as HTMLElement;
   const fallbackCopy = fallbackRoot.querySelector<HTMLElement>("[data-motion-copy]")!;
+  const fallbackStaggerItem = fallbackRoot.querySelector<HTMLElement>("[data-motion-stagger-item]")!;
   expect(fallbackRoot).not.toHaveClass("showcase-motion-active", "showcase-opening-active");
   expect(fallbackCopy.style.opacity).toBe("");
   expect(fallbackCopy.style.visibility).toBe("");
   expect(fallbackCopy.style.transform).toBe("");
   expect(fallbackCopy.style.clipPath).toBe("");
+  expect(fallbackStaggerItem.style.clipPath).toBe("");
+  expect(fallbackStaggerItem.style.willChange).toBe("");
   expect(motionMocks.lenisDestroy).toHaveBeenCalled();
   expect(motionMocks.tickerRemove).toHaveBeenCalled();
   expect(motionMocks.unsubscribe).toHaveBeenCalled();

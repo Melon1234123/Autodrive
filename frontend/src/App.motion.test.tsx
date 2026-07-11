@@ -1,6 +1,5 @@
 /** @vitest-environment jsdom */
 import "@testing-library/jest-dom/vitest";
-import { act } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -38,10 +37,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("plays opening on a new App lifetime but not after returning from the cockpit", () => {
+it("does not replay an interrupted opening after returning from the cockpit in the same App lifetime", () => {
   const first = render(<App />);
   expect(motionCalls.at(-1)?.playOpening).toBe(true);
-  act(() => motionCalls.at(-1)?.onOpeningComplete());
   fireEvent.click(screen.getByRole("button", { name: "进入效果展示" }));
   fireEvent.click(screen.getByRole("button", { name: "项目官网" }));
   expect(motionCalls.at(-1)?.playOpening).toBe(false);

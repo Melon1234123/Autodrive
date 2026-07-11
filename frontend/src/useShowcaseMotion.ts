@@ -22,7 +22,8 @@ const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 function clearMotionStyles(root: HTMLElement) {
   const targets = root.querySelectorAll<HTMLElement>([
     "[data-motion-line]", "[data-motion-index]", "[data-motion-copy]",
-    "[data-motion-stagger]", "[data-motion-stagger]>.archive-card",
+    "[data-motion-stagger]", "[data-motion-stagger]>[data-motion-stagger-item]",
+    "[data-motion-stagger]>.archive-card",
     "[data-motion-stagger]>.border-glow-card", ".motion-block",
     "[data-motion-media-frame]", "[data-motion-media]", "[data-motion-hero-media]",
     ".showcase-nav-glass", ".hero-foot", ".hero-actions", ".hero-copy", ".showcase-hero .kicker",
@@ -149,7 +150,7 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
           if (lines.length) timeline.fromTo(lines, { yPercent: 112, scaleY: .82 }, { yPercent: 0, scaleY: 1, duration: 1.22, stagger: .09, ease: "power4.out" }, index ? "<+.12" : 0);
           if (copies.length) timeline.fromTo(copies, { autoAlpha: 0, y: 44 }, { autoAlpha: 1, y: 0, duration: .88, stagger: .10 }, "<+.18");
           groups.forEach((group) => {
-            const items = Array.from(group.querySelectorAll<HTMLElement>(":scope>.archive-card,:scope>.border-glow-card"));
+            const items = Array.from(group.querySelectorAll<HTMLElement>(":scope>[data-motion-stagger-item],:scope>.archive-card,:scope>.border-glow-card"));
             timeline.fromTo(group, { y: 72 }, { y: 0, duration: 1.05 }, "<+.12");
             if (items.length) timeline.fromTo(items, { clipPath: "inset(100% 0 0 0)", willChange: "clip-path" }, { clipPath: "inset(0% 0 0 0)", duration: 1.05, stagger: .14, clearProps: "clipPath,willChange" }, "<+.05");
           });

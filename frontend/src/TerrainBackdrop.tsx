@@ -76,6 +76,7 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
     let renderer: THREE.WebGLRenderer | null = null;
     let geometry: THREE.PlaneGeometry | null = null;
     let material: THREE.ShaderMaterial | null = null;
+    let shaderProbeTarget: THREE.WebGLRenderTarget | null = null;
     let scene: THREE.Scene | null = null;
     let camera: THREE.OrthographicCamera | null = null;
     let uniforms: TerrainUniforms | null = null;
@@ -98,6 +99,12 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
       uniforms.uResolution.value.set(width, height);
     };
 
+    const disposeShaderProbe = () => {
+      const target = shaderProbeTarget;
+      shaderProbeTarget = null;
+      target?.dispose();
+    };
+
     const teardown = (forceContextLoss: boolean) => {
       if (disposed) return;
       disposed = true;
@@ -111,6 +118,7 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
       canvas.removeEventListener("webglcontextlost", handleContextLoss);
       resizeObserver?.disconnect();
       window.removeEventListener("resize", resize);
+      disposeShaderProbe();
       geometry?.dispose();
       material?.dispose();
       renderer?.dispose();
@@ -146,6 +154,23 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
         fallbackToStatic(error, true);
         return "failed";
       }
+    };
+
+    const probeShader = () => {
+      if (!renderer || !scene || !camera) return;
+      const target = new THREE.WebGLRenderTarget(1, 1);
+      shaderProbeTarget = target;
+      try {
+        renderer.setRenderTarget(target);
+        renderer.render(scene, camera);
+      } finally {
+        try {
+          renderer.setRenderTarget(null);
+        } finally {
+          disposeShaderProbe();
+        }
+      }
+      if (shaderFailed) throw new Error("Terrain shader compilation failed");
     };
 
     function scheduleStaticSubmit() {
@@ -225,6 +250,7 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
       });
       scene.add(new THREE.Mesh(geometry, material));
       renderer.compile(scene, camera);
+      probeShader();
       motion = window.matchMedia("(prefers-reduced-motion: reduce)");
       reduced = motion.matches;
       resize();

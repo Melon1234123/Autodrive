@@ -10,7 +10,10 @@ import { resolveTerrainTarget } from "./terrain-presets";
 const threeMocks = vi.hoisted(() => ({
   shouldThrow: false,
   shaderShouldFail: false,
-  render: vi.fn(),
+  onscreenRender: vi.fn(),
+  probeRender: vi.fn(),
+  setRenderTarget: vi.fn(),
+  probeTargetDispose: vi.fn(),
   setPixelRatio: vi.fn(),
   setSize: vi.fn(),
   dispose: vi.fn(),
@@ -22,8 +25,10 @@ vi.mock("three", async (importOriginal) => {
   const actual = await importOriginal<typeof import("three")>();
   return {
     ...actual,
+    WebGLRenderTarget: vi.fn(() => ({ dispose: threeMocks.probeTargetDispose })),
     WebGLRenderer: vi.fn(() => {
       if (threeMocks.shouldThrow) throw new Error("WebGL unavailable");
+      let renderTarget: unknown = null;
       const debug: { checkShaderErrors: boolean; onShaderError: (() => void) | null } = {
         checkShaderErrors: true,
         onShaderError: null,
@@ -33,8 +38,13 @@ vi.mock("three", async (importOriginal) => {
         setClearColor: vi.fn(),
         setPixelRatio: threeMocks.setPixelRatio,
         setSize: threeMocks.setSize,
+        setRenderTarget: (target: unknown) => {
+          renderTarget = target;
+          threeMocks.setRenderTarget(target);
+        },
         render: (...args: unknown[]) => {
-          threeMocks.render(...args);
+          if (renderTarget === null) threeMocks.onscreenRender(...args);
+          else threeMocks.probeRender(...args);
           if (threeMocks.shaderShouldFail) debug.onShaderError?.();
         },
         compile: threeMocks.compile,
@@ -56,7 +66,10 @@ let nowMs = 1000;
 beforeEach(() => {
   threeMocks.shouldThrow = false;
   threeMocks.shaderShouldFail = false;
-  threeMocks.render.mockClear();
+  threeMocks.onscreenRender.mockClear();
+  threeMocks.probeRender.mockClear();
+  threeMocks.setRenderTarget.mockClear();
+  threeMocks.probeTargetDispose.mockClear();
   threeMocks.setPixelRatio.mockClear();
   threeMocks.setSize.mockClear();
   threeMocks.dispose.mockClear();
@@ -98,7 +111,7 @@ afterEach(() => {
 });
 
 function latestColor0() {
-  const scene = threeMocks.render.mock.calls.at(-1)?.[0] as THREE.Scene;
+  const scene = threeMocks.onscreenRender.mock.calls.at(-1)?.[0] as THREE.Scene;
   const mesh = scene.children[0] as THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   return (mesh.material.uniforms.uColor0.value as THREE.Color).toArray();
 }
@@ -115,17 +128,24 @@ describe("TerrainBackdrop", () => {
   });
 
   it("does not render the initial showcase hidden preset", () => {
-    render(createElement(TerrainBackdrop, { view: "showcase", preset: "hidden", risk: "unknown" }));
-    expect(threeMocks.render).not.toHaveBeenCalled();
+    const view = render(createElement(TerrainBackdrop, { view: "showcase", preset: "hidden", risk: "unknown" }));
+    expect(THREE.WebGLRenderTarget).toHaveBeenCalledWith(1, 1);
+    expect(threeMocks.probeRender).toHaveBeenCalledTimes(1);
+    expect(threeMocks.onscreenRender).not.toHaveBeenCalled();
+    expect(threeMocks.setRenderTarget).toHaveBeenNthCalledWith(1, expect.anything());
+    expect(threeMocks.setRenderTarget).toHaveBeenNthCalledWith(2, null);
+    expect(threeMocks.probeTargetDispose).toHaveBeenCalledTimes(1);
+    view.unmount();
+    expect(threeMocks.probeTargetDispose).toHaveBeenCalledTimes(1);
   });
 
   it("throttles the first RAF against the synchronous visible frame", () => {
     render(createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }));
-    expect(threeMocks.render).toHaveBeenCalledTimes(1);
+    expect(threeMocks.onscreenRender).toHaveBeenCalledTimes(1);
     rafCallback?.(nowMs + 16);
-    expect(threeMocks.render).toHaveBeenCalledTimes(1);
+    expect(threeMocks.onscreenRender).toHaveBeenCalledTimes(1);
     rafCallback?.(nowMs + 34);
-    expect(threeMocks.render).toHaveBeenCalledTimes(2);
+    expect(threeMocks.onscreenRender).toHaveBeenCalledTimes(2);
   });
 
   it("uses a static fallback when WebGL construction fails", () => {
@@ -141,7 +161,37 @@ describe("TerrainBackdrop", () => {
     expect(screen.getByTestId("terrain-backdrop")).toHaveAttribute("data-state", "fallback");
     expect(threeMocks.dispose).toHaveBeenCalled();
     expect(threeMocks.forceContextLoss).toHaveBeenCalled();
+    expect(threeMocks.probeRender).toHaveBeenCalledTimes(1);
+    expect(threeMocks.onscreenRender).not.toHaveBeenCalled();
+    expect(threeMocks.probeTargetDispose).toHaveBeenCalledTimes(1);
     expect(console.warn).toHaveBeenCalledWith("Terrain backdrop fell back to a static image", expect.any(Error));
+  });
+
+  it("falls back from a hidden preset shader probe without an onscreen submission", () => {
+    threeMocks.shaderShouldFail = true;
+    const view = render(createElement(TerrainBackdrop, { view: "showcase", preset: "hidden", risk: "unknown" }));
+    expect(screen.getByTestId("terrain-backdrop")).toHaveAttribute("data-state", "fallback");
+    expect(threeMocks.probeRender).toHaveBeenCalledTimes(1);
+    expect(threeMocks.onscreenRender).not.toHaveBeenCalled();
+    expect(threeMocks.setRenderTarget).toHaveBeenNthCalledWith(1, expect.anything());
+    expect(threeMocks.setRenderTarget).toHaveBeenNthCalledWith(2, null);
+    expect(threeMocks.probeTargetDispose).toHaveBeenCalledTimes(1);
+    expect(console.warn).toHaveBeenCalledWith("Terrain backdrop fell back to a static image", expect.any(Error));
+    view.unmount();
+    expect(threeMocks.probeTargetDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back from a hidden-tab shader probe without an onscreen submission", () => {
+    documentHidden = true;
+    threeMocks.shaderShouldFail = true;
+    const view = render(createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }));
+    expect(screen.getByTestId("terrain-backdrop")).toHaveAttribute("data-state", "fallback");
+    expect(threeMocks.probeRender).toHaveBeenCalledTimes(1);
+    expect(threeMocks.onscreenRender).not.toHaveBeenCalled();
+    expect(threeMocks.probeTargetDispose).toHaveBeenCalledTimes(1);
+    expect(console.warn).toHaveBeenCalledWith("Terrain backdrop fell back to a static image", expect.any(Error));
+    view.unmount();
+    expect(threeMocks.probeTargetDispose).toHaveBeenCalledTimes(1);
   });
 
   it("falls back after a WebGL context loss", () => {
@@ -170,7 +220,7 @@ describe("TerrainBackdrop", () => {
   it("renders once without scheduling a loop under reduced motion", () => {
     reducedMotion = true;
     render(createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }));
-    expect(threeMocks.render).toHaveBeenCalledTimes(1);
+    expect(threeMocks.onscreenRender).toHaveBeenCalledTimes(1);
     expect(requestAnimationFrame).not.toHaveBeenCalled();
   });
 
@@ -200,20 +250,20 @@ describe("TerrainBackdrop", () => {
   it("does not submit frames while the browser tab is hidden", () => {
     render(createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }));
     rafCallback?.(nowMs + 40);
-    const visibleRenderCount = threeMocks.render.mock.calls.length;
+    const visibleRenderCount = threeMocks.onscreenRender.mock.calls.length;
     documentHidden = true;
     rafCallback?.(nowMs + 80);
-    expect(threeMocks.render).toHaveBeenCalledTimes(visibleRenderCount);
+    expect(threeMocks.onscreenRender).toHaveBeenCalledTimes(visibleRenderCount);
     documentHidden = false;
     document.dispatchEvent(new Event("visibilitychange"));
     rafCallback?.(nowMs + 120);
-    expect(threeMocks.render.mock.calls.length).toBeGreaterThan(visibleRenderCount);
+    expect(threeMocks.onscreenRender.mock.calls.length).toBeGreaterThan(visibleRenderCount);
   });
 
   it("does not render on initial mount while the browser tab is hidden", () => {
     documentHidden = true;
     render(createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }));
-    expect(threeMocks.render).not.toHaveBeenCalled();
+    expect(threeMocks.onscreenRender).not.toHaveBeenCalled();
   });
 
   it("blocks reduced-motion prop and motion submissions while hidden", () => {
@@ -224,7 +274,7 @@ describe("TerrainBackdrop", () => {
     motionCallback?.({ matches: false } as MediaQueryListEvent);
     rafCallback?.(nowMs + 40);
     motionCallback?.({ matches: true } as MediaQueryListEvent);
-    expect(threeMocks.render).not.toHaveBeenCalled();
+    expect(threeMocks.onscreenRender).not.toHaveBeenCalled();
   });
 
   it("caps desktop DPR at 1.25 and mobile DPR at 1", () => {
@@ -257,6 +307,7 @@ describe("TerrainBackdrop", () => {
     expect(disconnectResize).toHaveBeenCalled();
     expect(geometryDispose).toHaveBeenCalled();
     expect(materialDispose).toHaveBeenCalled();
+    expect(threeMocks.probeTargetDispose).toHaveBeenCalledTimes(1);
     expect(threeMocks.dispose).toHaveBeenCalled();
     expect(threeMocks.forceContextLoss).toHaveBeenCalled();
   });

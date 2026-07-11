@@ -105,7 +105,7 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
         lenis.stop();
       }
 
-      context = gsap.context(() => {
+      const initializeScopedMotion = () => {
         const hero = root.querySelector<HTMLElement>("[data-motion-hero]");
         const heroMedia = root.querySelector<HTMLElement>("[data-motion-hero-media]");
         const openingPanels = Array.from(root.querySelectorAll<HTMLElement>("[data-motion-opening-panel]"));
@@ -166,7 +166,18 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
         if (demoSection && demoMedia) {
           gsap.fromTo(demoMedia, { yPercent: -4 }, { yPercent: 4, ease: "none", scrollTrigger: { trigger: demoSection, scroller: root, start: "top bottom", end: "bottom top", scrub: 1 } });
         }
+      };
+      let contextInitializationError: unknown;
+      let contextInitializationFailed = false;
+      context = gsap.context(() => {
+        try {
+          initializeScopedMotion();
+        } catch (error) {
+          contextInitializationFailed = true;
+          contextInitializationError = error;
+        }
       }, root);
+      if (contextInitializationFailed) throw contextInitializationError;
 
       refreshFrame = window.requestAnimationFrame(() => ScrollTrigger.refresh());
     } catch {

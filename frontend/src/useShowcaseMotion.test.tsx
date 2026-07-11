@@ -12,7 +12,10 @@ const motionMocks = vi.hoisted(() => {
       fromTo: vi.fn(),
       set: vi.fn(),
     };
-    chain.fromTo.mockReturnValue(chain);
+    chain.fromTo.mockImplementation(() => {
+      if (motionMocks.throwOnTween) throw new Error("tween init failed");
+      return chain;
+    });
     chain.set.mockReturnValue(chain);
     return chain;
   };
@@ -53,6 +56,7 @@ const motionMocks = vi.hoisted(() => {
     lenisDestroy: vi.fn(),
     unsubscribe: vi.fn(),
     throwOnContext: false,
+    throwOnTween: false,
   };
 });
 
@@ -158,6 +162,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   motionMocks.timelineOptions.length = 0;
   motionMocks.throwOnContext = false;
+  motionMocks.throwOnTween = false;
   vi.stubGlobal("requestAnimationFrame", vi.fn(() => 17));
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
   window.history.replaceState(null, "", "/");
@@ -304,5 +309,26 @@ it("falls back visibly and releases only its resources when initialization throw
   expect(motionMocks.gsapDefaults).not.toHaveBeenCalled();
   expect(motionMocks.gsapKillTweensOf).not.toHaveBeenCalled();
   expect(motionMocks.scrollKillAll).not.toHaveBeenCalled();
+  expect(complete).toHaveBeenCalledTimes(1);
+});
+
+it("reverts its scoped context when a tween throws midway through initialization", () => {
+  installMatchMedia({ reduced: false, desktop: true });
+  motionMocks.throwOnTween = true;
+  const complete = vi.fn();
+  let view: ReturnType<typeof render> | undefined;
+
+  expect(() => {
+    view = render(<Harness onOpeningComplete={complete} seedHiddenStyles />);
+  }).not.toThrow();
+
+  const root = view!.container.querySelector("main") as HTMLElement;
+  expect(motionMocks.timelineOptions.length).toBeGreaterThan(0);
+  expect(motionMocks.contextRevert).toHaveBeenCalledTimes(1);
+  expect(motionMocks.tickerRemove).toHaveBeenCalledTimes(1);
+  expect(motionMocks.unsubscribe).toHaveBeenCalledTimes(1);
+  expect(motionMocks.lenisDestroy).toHaveBeenCalledTimes(1);
+  expect(root).not.toHaveClass("showcase-motion-active", "showcase-opening-active");
+  expect(root.querySelector("[data-motion-opening]")).toHaveAttribute("hidden");
   expect(complete).toHaveBeenCalledTimes(1);
 });

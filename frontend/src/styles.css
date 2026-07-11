@@ -775,3 +775,137 @@ h1 {
 .lidar-metadata { display:flex; flex-wrap:wrap; gap:7px 12px; padding:10px 2px 1px; color:#9db9b6; font-size:11px; font-variant-numeric:tabular-nums; }
 .lidar-metadata span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .lidar-status { color:#8bded5; font-weight:800; }.lidar-status-loading { color:#f3ca75; }.lidar-status-unavailable { color:#9db9b6; }.lidar-status-error { color:#ff9a8e; }
+/* Shared floating depth for showcase cards and the diagnosis cockpit. */
+.app-stage {
+  --float-highlight:rgba(255,255,255,.82);
+  --float-shadow:rgba(38,67,61,.18);
+  --float-glow:rgba(75,220,167,.36);
+  --float-dark-highlight:rgba(184,239,218,.12);
+  --float-dark-shadow:rgba(4,20,20,.32);
+  --float-dark-glow:rgba(217,243,91,.28);
+}
+
+.showcase-card,
+.proof-strip article,
+.route-card,
+.pain-grid article,
+.feature-grid article,
+.architecture-card,
+.agent-node,
+.demo-card,
+.header-bar,
+.camera-panel,
+.diagnosis-panel,
+.bev-panel,
+.map-panel,
+.risk-events-panel,
+.metric-card,
+.scene-box,
+.result-panel,
+.live-monitor-panel,
+.diagnosis-history-panel,
+.risk-event {
+  box-shadow:-10px -10px 24px var(--float-highlight),14px 16px 34px var(--float-shadow);
+}
+
+.showcase-card-dark,
+.architecture-card,
+.agent-node,
+.demo-card {
+  --float-highlight:var(--float-dark-highlight);
+  --float-shadow:var(--float-dark-shadow);
+  --float-glow:var(--float-dark-glow);
+}
+
+.showcase-card,
+.proof-strip article,
+.route-card,
+.pain-grid article,
+.feature-grid article,
+.agent-node,
+.metric-card,
+.risk-event {
+  position:relative;
+  transition:translate .24s ease,border-color .24s ease,box-shadow .24s ease;
+}
+
+.showcase-card::after,
+.proof-strip article::after,
+.route-card::after,
+.pain-grid article::after,
+.feature-grid article::after,
+.agent-node::after,
+.metric-card::after,
+.risk-event::after {
+  content:"";
+  position:absolute;
+  inset:-1px;
+  border:1px solid var(--float-glow);
+  border-radius:inherit;
+  box-shadow:0 0 22px var(--float-glow);
+  opacity:0;
+  pointer-events:none;
+  transition:opacity .24s ease;
+}
+
+@media (hover:hover) and (pointer:fine) {
+  .showcase-card:hover,
+  .proof-strip article:hover,
+  .route-card:hover,
+  .pain-grid article:hover,
+  .feature-grid article:hover,
+  .agent-node:hover,
+  .metric-card:hover,
+  .risk-event:hover { translate:0 -4px; }
+
+  .showcase-card:hover::after,
+  .proof-strip article:hover::after,
+  .route-card:hover::after,
+  .pain-grid article:hover::after,
+  .feature-grid article:hover::after,
+  .agent-node:hover::after,
+  .metric-card:hover::after,
+  .risk-event:hover::after { opacity:1; }
+
+  .camera-panel:hover,
+  .bev-panel:hover,
+  .map-panel:hover,
+  .demo-card:hover {
+    border-color:var(--float-glow);
+    box-shadow:-10px -10px 24px var(--float-highlight),14px 16px 34px var(--float-shadow),0 0 24px var(--float-glow);
+  }
+}
+
+.risk-event:focus-visible::after { opacity:1; }
+.risk-event:focus-visible,
+button:focus-visible {
+  outline:2px solid var(--float-glow);
+  outline-offset:3px;
+}
+
+.risk-event-high.is-active { box-shadow:inset 4px 0 #e96c5e,-10px -10px 24px var(--float-highlight),14px 16px 34px var(--float-shadow); }
+.risk-event-medium.is-active { box-shadow:inset 4px 0 #d6a93d,-10px -10px 24px var(--float-highlight),14px 16px 34px var(--float-shadow); }
+
+@media (prefers-reduced-motion:reduce) {
+  .showcase-card,
+  .proof-strip article,
+  .route-card,
+  .pain-grid article,
+  .feature-grid article,
+  .agent-node,
+  .metric-card,
+  .risk-event { transition:none; translate:none !important; }
+
+  .showcase-card::after,
+  .proof-strip article::after,
+  .route-card::after,
+  .pain-grid article::after,
+  .feature-grid article::after,
+  .agent-node::after,
+  .metric-card::after,
+  .risk-event::after { animation:none; transition:none; }
+}
+
+@media (max-width:680px) {
+  .app-stage { --float-shadow:rgba(38,67,61,.12); }
+}

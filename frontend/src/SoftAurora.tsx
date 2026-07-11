@@ -192,6 +192,8 @@ export default function SoftAurora({
     let canvas: HTMLCanvasElement | undefined;
     let listeningForPointer = false;
     let cleanedUp = false;
+    let motionQuery: MediaQueryList | undefined;
+    let reducedMotion = false;
     let currentMouse = [0.5, 0.5];
     let targetMouse = [0.5, 0.5];
 
@@ -221,11 +223,59 @@ export default function SoftAurora({
       }
     };
 
+    const renderFrame = (time: number) => {
+      if (!program || !renderer || !mesh) return;
+      program.uniforms.uTime.value = time * 0.001;
+
+      const mouse = program.uniforms.uMouse.value as Float32Array;
+      if (enableMouseInteraction) {
+        currentMouse[0] += 0.05 * (targetMouse[0] - currentMouse[0]);
+        currentMouse[1] += 0.05 * (targetMouse[1] - currentMouse[1]);
+        mouse[0] = currentMouse[0];
+        mouse[1] = currentMouse[1];
+      } else {
+        mouse[0] = 0.5;
+        mouse[1] = 0.5;
+      }
+
+      renderer.render({ scene: mesh });
+    };
+
+    const scheduleAnimation = () => {
+      if (cleanedUp || reducedMotion || animationFrameId !== undefined) return;
+      animationFrameId = requestAnimationFrame(update);
+    };
+
+    const update = (time: number) => {
+      animationFrameId = undefined;
+      if (cleanedUp || reducedMotion) return;
+      renderFrame(time);
+      scheduleAnimation();
+    };
+
+    const handleMotionPreferenceChange = (event: MediaQueryListEvent) => {
+      if (event.matches === reducedMotion) return;
+      reducedMotion = event.matches;
+      if (reducedMotion) {
+        if (animationFrameId !== undefined) {
+          cancelAnimationFrame(animationFrameId);
+          animationFrameId = undefined;
+        }
+        renderFrame(0);
+      } else {
+        scheduleAnimation();
+      }
+    };
+
     const cleanupRenderer = () => {
       if (cleanedUp) return;
       cleanedUp = true;
-      if (animationFrameId !== undefined) cancelAnimationFrame(animationFrameId);
+      if (animationFrameId !== undefined) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = undefined;
+      }
       window.removeEventListener("resize", resize);
+      motionQuery?.removeEventListener("change", handleMotionPreferenceChange);
       if (listeningForPointer) {
         window.removeEventListener("pointermove", handlePointerMove);
         window.removeEventListener("pointerleave", handlePointerLeave);
@@ -235,7 +285,9 @@ export default function SoftAurora({
     };
 
     try {
-      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+      reducedMotion = motionQuery.matches;
+      motionQuery.addEventListener("change", handleMotionPreferenceChange);
       renderer = new Renderer({
         alpha: true,
         premultipliedAlpha: false,
@@ -282,27 +334,8 @@ export default function SoftAurora({
         window.addEventListener("pointerleave", handlePointerLeave);
       }
 
-      const update = (time: number) => {
-        if (!program || !renderer || !mesh) return;
-        program.uniforms.uTime.value = time * 0.001;
-
-        const mouse = program.uniforms.uMouse.value as Float32Array;
-        if (enableMouseInteraction) {
-          currentMouse[0] += 0.05 * (targetMouse[0] - currentMouse[0]);
-          currentMouse[1] += 0.05 * (targetMouse[1] - currentMouse[1]);
-          mouse[0] = currentMouse[0];
-          mouse[1] = currentMouse[1];
-        } else {
-          mouse[0] = 0.5;
-          mouse[1] = 0.5;
-        }
-
-        renderer.render({ scene: mesh });
-        if (!reducedMotion) animationFrameId = requestAnimationFrame(update);
-      };
-
-      if (reducedMotion) update(0);
-      else animationFrameId = requestAnimationFrame(update);
+      if (reducedMotion) renderFrame(0);
+      else scheduleAnimation();
     } catch {
       cleanupRenderer();
     }

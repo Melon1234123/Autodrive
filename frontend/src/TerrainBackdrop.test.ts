@@ -1,0 +1,201 @@
+/** @vitest-environment jsdom */
+import "@testing-library/jest-dom/vitest";
+import { StrictMode, createElement } from "react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import * as THREE from "three";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import TerrainBackdrop from "./TerrainBackdrop";
+
+const threeMocks = vi.hoisted(() => ({
+  shouldThrow: false,
+  shaderShouldFail: false,
+  render: vi.fn(),
+  setPixelRatio: vi.fn(),
+  setSize: vi.fn(),
+  dispose: vi.fn(),
+  forceContextLoss: vi.fn(),
+  compile: vi.fn(),
+}));
+
+vi.mock("three", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("three")>();
+  return {
+    ...actual,
+    WebGLRenderer: vi.fn(() => {
+      if (threeMocks.shouldThrow) throw new Error("WebGL unavailable");
+      const debug: { checkShaderErrors: boolean; onShaderError: (() => void) | null } = {
+        checkShaderErrors: true,
+        onShaderError: null,
+      };
+      return {
+        debug,
+        setClearColor: vi.fn(),
+        setPixelRatio: threeMocks.setPixelRatio,
+        setSize: threeMocks.setSize,
+        render: (...args: unknown[]) => {
+          threeMocks.render(...args);
+          if (threeMocks.shaderShouldFail) debug.onShaderError?.();
+        },
+        compile: threeMocks.compile,
+        dispose: threeMocks.dispose,
+        forceContextLoss: threeMocks.forceContextLoss,
+      };
+    }),
+  };
+});
+
+let rafCallback: FrameRequestCallback | null = null;
+const cancelAnimationFrameMock = vi.fn();
+const disconnectResize = vi.fn();
+let reducedMotion = false;
+let motionCallback: ((event: MediaQueryListEvent) => void) | null = null;
+
+beforeEach(() => {
+  threeMocks.shouldThrow = false;
+  threeMocks.shaderShouldFail = false;
+  threeMocks.render.mockClear();
+  threeMocks.setPixelRatio.mockClear();
+  threeMocks.setSize.mockClear();
+  threeMocks.dispose.mockClear();
+  threeMocks.forceContextLoss.mockClear();
+  threeMocks.compile.mockClear();
+  vi.stubGlobal("requestAnimationFrame", vi.fn((callback: FrameRequestCallback) => {
+    rafCallback = callback;
+    return 17;
+  }));
+  vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrameMock);
+  vi.stubGlobal("ResizeObserver", class {
+    observe() {}
+    disconnect() { disconnectResize(); }
+  });
+  vi.stubGlobal("matchMedia", vi.fn(() => ({
+    matches: reducedMotion,
+    addEventListener: vi.fn((_type: string, callback: (event: MediaQueryListEvent) => void) => {
+      motionCallback = callback;
+    }),
+    removeEventListener: vi.fn((_type: string, callback: (event: MediaQueryListEvent) => void) => {
+      if (motionCallback === callback) motionCallback = null;
+    }),
+  })));
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  vi.clearAllMocks();
+  vi.restoreAllMocks();
+  reducedMotion = false;
+  rafCallback = null;
+  motionCallback = null;
+});
+
+function latestColor0() {
+  const scene = threeMocks.render.mock.calls.at(-1)?.[0] as THREE.Scene;
+  const mesh = scene.children[0] as THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+  return (mesh.material.uniforms.uColor0.value as THREE.Color).toArray();
+}
+
+describe("TerrainBackdrop", () => {
+  it("mounts one inert WebGL canvas with a stable instance id", () => {
+    const { rerender } = render(createElement(TerrainBackdrop, { view: "showcase", preset: "hidden", risk: "unknown" }));
+    const canvas = screen.getByTestId("terrain-backdrop-canvas");
+    const instanceId = canvas.parentElement?.dataset.instanceId;
+    rerender(createElement(TerrainBackdrop, { view: "dashboard", preset: "closing", risk: "high" }));
+    expect(screen.getAllByTestId("terrain-backdrop-canvas")).toHaveLength(1);
+    expect(screen.getByTestId("terrain-backdrop-canvas").parentElement?.dataset.instanceId).toBe(instanceId);
+    expect(getComputedStyle(canvas.parentElement as Element).pointerEvents).toBe("none");
+  });
+
+  it("uses a static fallback when WebGL construction fails", () => {
+    threeMocks.shouldThrow = true;
+    render(createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }));
+    expect(screen.getByTestId("terrain-backdrop")).toHaveAttribute("data-state", "fallback");
+  });
+
+  it("uses a static fallback when the shader fails on first use", () => {
+    threeMocks.shaderShouldFail = true;
+    render(createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }));
+    expect(screen.getByTestId("terrain-backdrop")).toHaveAttribute("data-state", "fallback");
+    expect(threeMocks.dispose).toHaveBeenCalled();
+    expect(threeMocks.forceContextLoss).toHaveBeenCalled();
+  });
+
+  it("falls back after a WebGL context loss", () => {
+    render(createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }));
+    fireEvent(screen.getByTestId("terrain-backdrop-canvas"), new Event("webglcontextlost", { cancelable: true }));
+    expect(screen.getByTestId("terrain-backdrop")).toHaveAttribute("data-state", "fallback");
+  });
+
+  it("keeps context loss terminal when a queued motion event arrives", () => {
+    const geometryDispose = vi.spyOn(THREE.PlaneGeometry.prototype, "dispose");
+    const materialDispose = vi.spyOn(THREE.ShaderMaterial.prototype, "dispose");
+    render(createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }));
+    const queuedMotionCallback = motionCallback;
+    const scheduledFrames = vi.mocked(requestAnimationFrame).mock.calls.length;
+    fireEvent(screen.getByTestId("terrain-backdrop-canvas"), new Event("webglcontextlost", { cancelable: true }));
+    queuedMotionCallback?.({ matches: false } as MediaQueryListEvent);
+    expect(requestAnimationFrame).toHaveBeenCalledTimes(scheduledFrames);
+    expect(disconnectResize).toHaveBeenCalled();
+    expect(geometryDispose).toHaveBeenCalled();
+    expect(materialDispose).toHaveBeenCalled();
+    expect(threeMocks.dispose).toHaveBeenCalled();
+  });
+
+  it("renders once without scheduling a loop under reduced motion", () => {
+    reducedMotion = true;
+    render(createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }));
+    expect(threeMocks.render).toHaveBeenCalledTimes(1);
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
+  });
+
+  it("does not rewind a snapped target when reduced motion is disabled", () => {
+    reducedMotion = true;
+    const view = render(createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }));
+    view.rerender(createElement(TerrainBackdrop, { view: "showcase", preset: "pain", risk: "unknown" }));
+    const snappedColor = latestColor0();
+    motionCallback?.({ matches: false } as MediaQueryListEvent);
+    rafCallback?.(performance.now() + 40);
+    expect(latestColor0()).toEqual(snappedColor);
+  });
+
+  it("does not force a live canvas context during StrictMode effect replay", () => {
+    const view = render(createElement(
+      StrictMode,
+      null,
+      createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }),
+    ));
+    expect(screen.getByTestId("terrain-backdrop")).toHaveAttribute("data-state", "webgl");
+    expect(threeMocks.forceContextLoss).not.toHaveBeenCalled();
+    view.unmount();
+    expect(threeMocks.forceContextLoss).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not submit frames while the browser tab is hidden", () => {
+    let hidden = false;
+    vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+    render(createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }));
+    rafCallback?.(40);
+    const visibleRenderCount = threeMocks.render.mock.calls.length;
+    hidden = true;
+    rafCallback?.(80);
+    expect(threeMocks.render).toHaveBeenCalledTimes(visibleRenderCount);
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    rafCallback?.(120);
+    expect(threeMocks.render.mock.calls.length).toBeGreaterThan(visibleRenderCount);
+  });
+
+  it("releases animation, observers, geometry, material and renderer on cleanup", () => {
+    const geometryDispose = vi.spyOn(THREE.PlaneGeometry.prototype, "dispose");
+    const materialDispose = vi.spyOn(THREE.ShaderMaterial.prototype, "dispose");
+    const view = render(createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }));
+    rafCallback?.(40);
+    view.unmount();
+    expect(cancelAnimationFrameMock).toHaveBeenCalled();
+    expect(disconnectResize).toHaveBeenCalled();
+    expect(geometryDispose).toHaveBeenCalled();
+    expect(materialDispose).toHaveBeenCalled();
+    expect(threeMocks.dispose).toHaveBeenCalled();
+    expect(threeMocks.forceContextLoss).toHaveBeenCalled();
+  });
+});

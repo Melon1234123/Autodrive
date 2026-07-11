@@ -1,0 +1,33 @@
+.terrain-backdrop {
+  position: fixed;
+  z-index: 0;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background-color: #f3f4e8;
+  transition: opacity 180ms ease;
+}
+
+.terrain-backdrop canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.terrain-backdrop--hidden { opacity: 0; }
+.terrain-backdrop--fallback {
+  background-image: url("/terrain-fallback.webp");
+  background-position: center;
+  background-size: cover;
+}
+.terrain-backdrop--fallback canvas { display: none; }
+.terrain-backdrop--fallback[data-preset="pain"],
+.terrain-backdrop--fallback[data-preset="closing"] { background-color: #102e27; background-blend-mode: multiply; }
+.terrain-backdrop--fallback[data-preset="route"] { background-color: #e6efe6; background-blend-mode: soft-light; }
+.terrain-backdrop--fallback[data-preset="demo"] { background-color: #d8e6de; background-blend-mode: soft-light; }
+.terrain-backdrop--fallback[data-preset="product"] { background-color: #bfd4c3; background-blend-mode: soft-light; }
+.terrain-backdrop--fallback[data-view="dashboard"] { background-color: #dce8df; background-blend-mode: soft-light; }
+
+@media (prefers-reduced-motion: reduce) {
+  .terrain-backdrop { transition: none; }
+}

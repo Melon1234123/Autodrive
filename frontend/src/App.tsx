@@ -4,6 +4,7 @@ import { RiskEventsPanel } from "./RiskEventsPanel";
 import { deriveRiskEvents } from "./risk-events";
 import type { RiskEvent } from "./risk-events";
 import { LidarBev, type LidarHistoryCloud } from "./LidarBev";
+import SoftAurora from "./SoftAurora";
 import { findNearestLidarFrame, LidarFrameCache, loadLidarIndex } from "./lidar";
 import type { LidarIndex } from "./lidar";
 import { forwardToScreenDown, verticalVisibleBounds } from "./bev-orientation";
@@ -1184,11 +1185,9 @@ function App() {
     { label: "目标", value: `${currentPerception?.objects.length ?? 0}`, icon: Layers3 },
   ];
 
-  if (!showDashboard) {
-    return <ProjectSite onOpenDemo={() => setShowDashboard(true)} />;
-  }
-
-  return (
+  const currentView = !showDashboard ? (
+    <ProjectSite onOpenDemo={() => setShowDashboard(true)} />
+  ) : (
     <main className="app-shell">
       <section className="command-grid">
         <header className="header-bar">
@@ -1402,6 +1401,15 @@ function App() {
         <RiskEventsPanel events={completedRiskEvents} currentTime={currentTime} onSeek={handleSeekRiskEvent} />
       </section>
     </main>
+  );
+
+  return (
+    <div className="app-stage">
+      <div className="app-aurora" aria-hidden="true">
+        <SoftAurora speed={0.42} scale={1.7} brightness={0.46} color1="#f7f7f7" color2="#79e6b2" bandSpread={1.2} mouseInfluence={0.11} />
+      </div>
+      <div className="app-content">{currentView}</div>
+    </div>
   );
 }
 

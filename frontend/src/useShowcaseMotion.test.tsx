@@ -187,6 +187,11 @@ function Harness({
             <video data-motion-media />
           </div>
         </section>
+        <section data-motion-section id="unseen-section">
+          <div data-motion-index />
+          <div data-motion-line />
+          <p data-motion-copy />
+        </section>
         <section id="product" />
       </div>
       <a href="#product">产品体系</a>
@@ -208,6 +213,12 @@ function openingDuration() {
     const targetCount = Array.isArray(targets) ? targets.length : 1;
     return (position as number) + (options.duration ?? 0) + (options.stagger ?? 0) * (targetCount - 1);
   }));
+}
+
+function sectionTimelineOptions(section: Element) {
+  return motionMocks.timelineOptions.filter((options) => (
+    (options.scrollTrigger as { trigger?: Element } | undefined)?.trigger === section
+  ));
 }
 
 beforeEach(() => {
@@ -309,6 +320,35 @@ it.each([
   expect(root).toHaveClass("showcase-motion-active");
   expect(root).not.toHaveClass("showcase-opening-active");
   expect(complete).toHaveBeenCalledTimes(1);
+});
+
+it.each([
+  ["reduced motion", "reducedQuery", true],
+  ["desktop gate", "desktopQuery", false],
+] as const)("does not rebuild an entered section after the %s cycles while retaining unseen section timelines", (_label, queryName, disabledValue) => {
+  const media = installMatchMedia({ reduced: false, desktop: true });
+  const view = render(<Harness playOpening={false} seedHiddenStyles />);
+  const enteredSection = view.container.querySelector("#demo")!;
+  const unseenSection = view.container.querySelector("#unseen-section")!;
+  const enteredCopy = enteredSection.querySelector<HTMLElement>("[data-motion-copy]")!;
+  const enteredTrigger = sectionTimelineOptions(enteredSection)[0].scrollTrigger as {
+    onEnter?: () => void;
+  };
+
+  expect(sectionTimelineOptions(enteredSection)).toHaveLength(1);
+  expect(sectionTimelineOptions(unseenSection)).toHaveLength(1);
+  expect(enteredTrigger.onEnter).toEqual(expect.any(Function));
+  act(() => enteredTrigger.onEnter?.());
+
+  act(() => media[queryName].setMatches(disabledValue));
+  expect(enteredCopy.style.opacity).toBe("");
+  expect(enteredCopy.style.transform).toBe("");
+
+  act(() => media[queryName].setMatches(!disabledValue));
+
+  expect(sectionTimelineOptions(enteredSection)).toHaveLength(1);
+  expect(sectionTimelineOptions(unseenSection)).toHaveLength(2);
+  expect(view.container.querySelector("main")).toHaveClass("showcase-motion-active");
 });
 
 it("keeps the opening cadence within the 2.8 to 3.2 second target", () => {

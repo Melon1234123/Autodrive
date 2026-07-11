@@ -45,6 +45,7 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
   const playOnMountRef = useRef(playOpening);
   const completeRef = useRef(onOpeningComplete);
   const openingResolvedRef = useRef(false);
+  const enteredSectionsRef = useRef(new WeakSet<HTMLElement>());
   completeRef.current = onOpeningComplete;
 
   useLayoutEffect(() => {
@@ -167,6 +168,7 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
           }
 
           root.querySelectorAll<HTMLElement>("[data-motion-section]").forEach((section) => {
+            if (enteredSectionsRef.current.has(section)) return;
             const index = section.querySelector<HTMLElement>("[data-motion-index]");
             const lines = Array.from(section.querySelectorAll<HTMLElement>("[data-motion-line]"));
             const copies = Array.from(section.querySelectorAll<HTMLElement>("[data-motion-copy]"));
@@ -175,7 +177,15 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
             const mediaFrame = section.querySelector<HTMLElement>("[data-motion-media-frame]");
             const media = section.querySelector<HTMLElement>("[data-motion-media]");
             const timeline = gsap.timeline({
-              scrollTrigger: { trigger: section, scroller: root, start: "top 76%", once: true },
+              scrollTrigger: {
+                trigger: section,
+                scroller: root,
+                start: "top 76%",
+                once: true,
+                onEnter: () => {
+                  if (runtimeActive) enteredSectionsRef.current.add(section);
+                },
+              },
               defaults: { ease: "power3.out" },
             });
             if (index) timeline.fromTo(index, { autoAlpha: 0, y: 32 }, { autoAlpha: 1, y: 0, duration: .75 });

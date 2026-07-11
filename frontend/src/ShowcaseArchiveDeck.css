@@ -85,7 +85,7 @@
 }
 
 .archive-card.is-active .archive-number-box { margin-bottom:18px; }
-.archive-card.is-active .archive-number-mask { top:0; left:0; transform:scale(.92); transform-origin:center; }
+.archive-card.is-active .archive-number-mask { top:0; left:0; transform:scale(.9); transform-origin:center; }
 .archive-number-fallback { display:none; width:89px; height:108px; align-items:center; font-size:78px; font-weight:300; line-height:1; }
 
 .archive-card-title { max-width:210px; font-size:15px; font-weight:800; line-height:1.16; }

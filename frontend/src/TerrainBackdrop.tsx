@@ -32,6 +32,8 @@ type TerrainUniforms = {
   uLineColor: { value: THREE.Color };
 };
 
+type TerrainSubmitResult = "blocked" | "throttled" | "submitted" | "failed";
+
 const FRAME_INTERVAL_MS = 1000 / 30;
 const smoothstep = (value: number) => value * value * (3 - 2 * value);
 const setColor = (color: THREE.Color, rgb: readonly [number, number, number]) => color.setRGB(rgb[0], rgb[1], rgb[2]);
@@ -80,11 +82,12 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
     let resizeObserver: ResizeObserver | null = null;
     let motion: MediaQueryList | null = null;
     let frameId: number | null = null;
+    let staticTimerId: number | null = null;
     let shaderFailed = false;
     let disposed = false;
     let reduced = false;
     let lastTick = performance.now();
-    let lastSubmit = -FRAME_INTERVAL_MS;
+    let lastSubmit = Number.NEGATIVE_INFINITY;
 
     const resize = () => {
       if (disposed || !uniforms) return;
@@ -100,6 +103,8 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
       disposed = true;
       if (frameId !== null) cancelAnimationFrame(frameId);
       frameId = null;
+      if (staticTimerId !== null) window.clearTimeout(staticTimerId);
+      staticTimerId = null;
       drawStaticRef.current = null;
       document.removeEventListener("visibilitychange", handleVisibility);
       motion?.removeEventListener("change", handleMotion);
@@ -119,41 +124,57 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
       setFallback(true);
     };
 
-    const renderFrame = () => {
-      if (disposed || !renderer || !scene || !camera || !uniforms) return;
+    const submit = (now: number): Exclude<TerrainSubmitResult, "failed"> => {
+      if (disposed || document.hidden || !renderer || !scene || !camera || !uniforms) return "blocked";
       const transition = transitionRef.current;
       const progress = Math.min(1, Math.max(0, (simulationMsRef.current - transition.startedAt) / TERRAIN_TRANSITION_MS));
       currentTargetRef.current = interpolateTerrainTarget(transition.from, transition.to, smoothstep(progress));
+      const invisible = transition.to.opacity === 0 && currentTargetRef.current.opacity < 0.001;
+      if (invisible) return "blocked";
+      if (now - lastSubmit < FRAME_INTERVAL_MS) return "throttled";
       applyTarget(uniforms, currentTargetRef.current, simulationMsRef.current);
       renderer.render(scene, camera);
       if (shaderFailed) throw new Error("Terrain shader compilation failed");
+      lastSubmit = now;
+      return "submitted";
     };
 
-    const drawSafely = () => {
+    const submitSafely = (now: number): TerrainSubmitResult => {
       try {
-        renderFrame();
-        return true;
+        return submit(now);
       } catch (error) {
         fallbackToStatic(error, true);
-        return false;
+        return "failed";
       }
     };
+
+    function scheduleStaticSubmit() {
+      if (disposed || !reduced || document.hidden || staticTimerId !== null) return;
+      const elapsed = performance.now() - lastSubmit;
+      const delay = Math.max(FRAME_INTERVAL_MS - elapsed, 0);
+      staticTimerId = window.setTimeout(() => {
+        staticTimerId = null;
+        if (disposed || !reduced) return;
+        if (submitSafely(performance.now()) === "throttled") scheduleStaticSubmit();
+      }, delay);
+    }
 
     function tick(now: number) {
       if (disposed) return;
       const delta = document.hidden ? 0 : Math.min(Math.max(now - lastTick, 0), 100);
       lastTick = now;
       simulationMsRef.current += delta;
-      if (!document.hidden && now - lastSubmit >= FRAME_INTERVAL_MS) {
-        const hidden = transitionRef.current.to.opacity === 0 && currentTargetRef.current.opacity < 0.001;
-        if (!hidden && !drawSafely()) return;
-        lastSubmit = now;
-      }
+      if (submitSafely(now) === "failed") return;
       if (!disposed) frameId = requestAnimationFrame(tick);
     }
 
     function handleVisibility() {
-      if (!disposed) lastTick = performance.now();
+      if (disposed) return;
+      lastTick = performance.now();
+      if (document.hidden) {
+        if (staticTimerId !== null) window.clearTimeout(staticTimerId);
+        staticTimerId = null;
+      } else if (reduced) drawStaticRef.current?.();
     }
 
     function handleMotion(event: MediaQueryListEvent) {
@@ -161,6 +182,8 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
       reduced = event.matches;
       if (frameId !== null) cancelAnimationFrame(frameId);
       frameId = null;
+      if (staticTimerId !== null) window.clearTimeout(staticTimerId);
+      staticTimerId = null;
       if (reduced) drawStaticRef.current?.();
       else {
         lastTick = performance.now();
@@ -214,10 +237,12 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
           to: currentTargetRef.current,
           startedAt: simulationMsRef.current,
         };
-        drawSafely();
+        if (submitSafely(performance.now()) === "throttled") scheduleStaticSubmit();
       };
 
-      renderFrame();
+      const initialNow = performance.now();
+      lastTick = initialNow;
+      if (submitSafely(initialNow) === "failed") return () => teardown(false);
       resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
       resizeObserver?.observe(document.documentElement);
       window.addEventListener("resize", resize);

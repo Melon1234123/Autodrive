@@ -1,20 +1,25 @@
 /** @vitest-environment jsdom */
 import "@testing-library/jest-dom/vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { StrictMode, useRef } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const motionMocks = vi.hoisted(() => {
   const timelineOptions: Array<Record<string, unknown>> = [];
   const timelineTargets: unknown[] = [];
+  const timelineFromToCalls: unknown[][] = [];
   const makeTimeline = (options: Record<string, unknown> = {}) => {
     timelineOptions.push(options);
     const chain = {
       fromTo: vi.fn(),
       set: vi.fn(),
     };
-    chain.fromTo.mockImplementation((targets: unknown) => {
+    chain.fromTo.mockImplementation((...args: unknown[]) => {
+      const [targets] = args;
       timelineTargets.push(targets);
+      timelineFromToCalls.push(args);
       if (motionMocks.throwOnTween) throw new Error("tween init failed");
       return chain;
     });
@@ -45,6 +50,7 @@ const motionMocks = vi.hoisted(() => {
     makeTimeline,
     timelineOptions,
     timelineTargets,
+    timelineFromToCalls,
     tickerAdd: vi.fn(),
     tickerRemove: vi.fn(),
     scrollUpdate: vi.fn(),
@@ -102,17 +108,42 @@ vi.mock("lenis", () => ({
 import ShowcaseOpening from "./ShowcaseOpening";
 import { useShowcaseMotion } from "./useShowcaseMotion";
 
-function installMatchMedia({ reduced, desktop }: { reduced: boolean; desktop: boolean }) {
-  vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
-    matches: query.includes("prefers-reduced-motion") ? reduced : desktop,
-    media: query,
+const showcaseMotionCss = readFileSync(resolve(process.cwd(), "src/showcase-motion.css"), "utf8");
+
+type MutableMediaQuery = MediaQueryList & { setMatches: (matches: boolean) => void };
+
+function createMutableMediaQuery(media: string, initialMatches: boolean): MutableMediaQuery {
+  let matches = initialMatches;
+  const listeners = new Set<(event: MediaQueryListEvent) => void>();
+  const query = {
+    get matches() { return matches; },
+    media,
     onchange: null,
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
+    addEventListener: vi.fn((_type: string, listener: EventListenerOrEventListenerObject) => {
+      listeners.add(listener as (event: MediaQueryListEvent) => void);
+    }),
+    removeEventListener: vi.fn((_type: string, listener: EventListenerOrEventListenerObject) => {
+      listeners.delete(listener as (event: MediaQueryListEvent) => void);
+    }),
+    addListener: vi.fn((listener: (event: MediaQueryListEvent) => void) => listeners.add(listener)),
+    removeListener: vi.fn((listener: (event: MediaQueryListEvent) => void) => listeners.delete(listener)),
     dispatchEvent: vi.fn(),
-  })));
+    setMatches(nextMatches: boolean) {
+      matches = nextMatches;
+      const event = { matches, media } as MediaQueryListEvent;
+      listeners.forEach((listener) => listener(event));
+    },
+  };
+  return query as MutableMediaQuery;
+}
+
+function installMatchMedia({ reduced, desktop }: { reduced: boolean; desktop: boolean }) {
+  const reducedQuery = createMutableMediaQuery("(prefers-reduced-motion: reduce)", reduced);
+  const desktopQuery = createMutableMediaQuery("(min-width: 1024px) and (pointer: fine)", desktop);
+  vi.stubGlobal("matchMedia", vi.fn((query: string) => (
+    query.includes("prefers-reduced-motion") ? reducedQuery : desktopQuery
+  )));
+  return { reducedQuery, desktopQuery };
 }
 
 function Harness({
@@ -134,7 +165,7 @@ function Harness({
           <div data-motion-line />
           {includeHeroMedia && <video data-motion-hero-media />}
         </section>
-        <section data-motion-section>
+        <section data-motion-section id="demo">
           <div data-motion-index />
           <div data-motion-line />
           <p
@@ -152,6 +183,9 @@ function Harness({
               style={seedHiddenStyles ? { clipPath: "inset(100% 0 0 0)", willChange: "clip-path" } : undefined}
             >Footer item</span>
           </div>
+          <div data-motion-media-frame>
+            <video data-motion-media />
+          </div>
         </section>
         <section id="product" />
       </div>
@@ -167,10 +201,20 @@ function openingCompletions() {
   ));
 }
 
+function openingDuration() {
+  const calls = motionMocks.timelineFromToCalls.filter((call) => typeof call[3] === "number");
+  return Math.max(...calls.map(([targets, _from, to, position]) => {
+    const options = to as { duration?: number; stagger?: number };
+    const targetCount = Array.isArray(targets) ? targets.length : 1;
+    return (position as number) + (options.duration ?? 0) + (options.stagger ?? 0) * (targetCount - 1);
+  }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   motionMocks.timelineOptions.length = 0;
   motionMocks.timelineTargets.length = 0;
+  motionMocks.timelineFromToCalls.length = 0;
   motionMocks.throwOnContext = false;
   motionMocks.throwOnTween = false;
   vi.stubGlobal("requestAnimationFrame", vi.fn(() => 17));
@@ -229,6 +273,75 @@ it("finishes the opening fallback when the optional hero media is absent", () =>
   expect(complete).toHaveBeenCalledTimes(1);
 });
 
+it.each([
+  ["reduced motion", "reducedQuery", true],
+  ["desktop gate", "desktopQuery", false],
+] as const)("tears down immediately when the %s changes and never replays a resolved opening", (_label, queryName, disabledValue) => {
+  const media = installMatchMedia({ reduced: false, desktop: true });
+  const complete = vi.fn();
+  const view = render(<Harness onOpeningComplete={complete} seedHiddenStyles />);
+  const root = view.container.querySelector("main") as HTMLElement;
+  const copy = root.querySelector<HTMLElement>("[data-motion-copy]")!;
+  const interruptedOpening = openingCompletions()[0];
+
+  expect(openingCompletions()).toHaveLength(1);
+  expect(root).toHaveClass("showcase-motion-active", "showcase-opening-active");
+
+  act(() => media[queryName].setMatches(disabledValue));
+
+  expect(motionMocks.contextRevert).toHaveBeenCalledTimes(1);
+  expect(motionMocks.unsubscribe).toHaveBeenCalledTimes(1);
+  expect(motionMocks.lenisDestroy).toHaveBeenCalledTimes(1);
+  expect(root).not.toHaveClass("showcase-motion-active", "showcase-opening-active");
+  expect(root.querySelector("[data-motion-opening]")).toHaveAttribute("hidden");
+  expect(copy.style.opacity).toBe("");
+  expect(copy.style.transform).toBe("");
+  expect(complete).toHaveBeenCalledTimes(1);
+
+  interruptedOpening();
+  expect(motionMocks.lenisStart).not.toHaveBeenCalled();
+  expect(complete).toHaveBeenCalledTimes(1);
+
+  act(() => media[queryName].setMatches(!disabledValue));
+
+  expect(motionMocks.lenisConstruct).toHaveBeenCalledTimes(2);
+  expect(openingCompletions()).toHaveLength(1);
+  expect(root).toHaveClass("showcase-motion-active");
+  expect(root).not.toHaveClass("showcase-opening-active");
+  expect(complete).toHaveBeenCalledTimes(1);
+});
+
+it("keeps the opening cadence within the 2.8 to 3.2 second target", () => {
+  installMatchMedia({ reduced: false, desktop: true });
+  render(<Harness />);
+
+  expect(openingDuration()).toBeGreaterThanOrEqual(2.8);
+  expect(openingDuration()).toBeLessThanOrEqual(3.2);
+});
+
+it("keeps Demo reveal scale composed with its concurrent parallax transform", () => {
+  installMatchMedia({ reduced: false, desktop: true });
+  const view = render(<Harness />);
+  const demoMedia = view.container.querySelector("[data-motion-media]");
+  const scaleReveal = motionMocks.timelineFromToCalls.find(([target, from]) => (
+    target === demoMedia && (from as { scale?: number }).scale === 1.06
+  ));
+  const parallax = motionMocks.gsapFromTo.mock.calls.find(([target, from]) => (
+    target === demoMedia && (from as { yPercent?: number }).yPercent === -4
+  ));
+
+  expect(scaleReveal).toBeDefined();
+  expect((scaleReveal?.[2] as { clearProps?: string }).clearProps).toBeUndefined();
+  expect(parallax?.[2]).toEqual(expect.objectContaining({ yPercent: 4 }));
+});
+
+it("reserves edge coverage for both parallax media layers", () => {
+  expect(showcaseMotionCss).toMatch(/\.hero-video\s*{\s*inset:-6% 0;\s*height:112%;\s*}/);
+  expect(showcaseMotionCss).toMatch(
+    /\[data-motion-media-frame\]>\[data-motion-media\]\s*{[^}]*inset:-5% 0;[^}]*height:110%;[^}]*}/,
+  );
+});
+
 it("creates one root-scoped synchronized runtime, handles anchors, and cleans up", () => {
   installMatchMedia({ reduced: false, desktop: true });
   const complete = vi.fn();
@@ -283,6 +396,8 @@ it("creates one root-scoped synchronized runtime, handles anchors, and cleans up
   expect(motionMocks.unsubscribe).toHaveBeenCalledTimes(1);
   expect(motionMocks.lenisDestroy).toHaveBeenCalledTimes(1);
   expect(motionMocks.contextRevert).toHaveBeenCalledTimes(1);
+  const queries = vi.mocked(window.matchMedia).mock.results.map((result) => result.value);
+  expect(queries.every((query) => vi.mocked(query.removeEventListener).mock.calls.length === 1)).toBe(true);
   expect(motionMocks.gsapDefaults).not.toHaveBeenCalled();
   expect(motionMocks.gsapKillTweensOf).not.toHaveBeenCalled();
   expect(motionMocks.scrollKillAll).not.toHaveBeenCalled();

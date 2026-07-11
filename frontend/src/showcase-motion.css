@@ -50,6 +50,12 @@
 .showcase.showcase-motion-active { scroll-behavior:auto; scroll-snap-type:none; }
 .showcase.showcase-opening-active .showcase-nav-glass { transition:none; }
 .showcase.showcase-motion-active .hero-video { inset:-6% 0; height:112%; }
+.showcase.showcase-motion-active [data-motion-media-frame]>[data-motion-media] {
+  position:absolute;
+  inset:-5% 0;
+  width:100%;
+  height:110%;
+}
 
 @media (prefers-reduced-motion:reduce) {
   .showcase-opening { display:none!important; }

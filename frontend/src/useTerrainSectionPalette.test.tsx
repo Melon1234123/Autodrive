@@ -26,6 +26,11 @@ it("uses visible area, DOM order and the 8/15 percent hysteresis", () => {
   rows[0].area = 100;
   rows[1].area = 120;
   expect(selectTerrainPreset(rows, "positioning", 1000)).toBe("pain");
+
+  expect(selectTerrainPreset([
+    { preset: "positioning", area: 500, order: 0 },
+    { preset: "pain", area: 500, order: 1 },
+  ], "hidden", 1000)).toBe("positioning");
 });
 
 it("observes terrain sections against the showcase root and disconnects", () => {
@@ -33,8 +38,12 @@ it("observes terrain sections against the showcase root and disconnects", () => 
   const disconnect = vi.fn();
   const observe = vi.fn();
   let options: IntersectionObserverInit | undefined;
+  let callback: IntersectionObserverCallback | undefined;
   vi.stubGlobal("IntersectionObserver", class {
-    constructor(_callback: IntersectionObserverCallback, observerOptions?: IntersectionObserverInit) { options = observerOptions; }
+    constructor(observerCallback: IntersectionObserverCallback, observerOptions?: IntersectionObserverInit) {
+      callback = observerCallback;
+      options = observerOptions;
+    }
     observe = observe;
     disconnect = disconnect;
     unobserve() {}
@@ -55,9 +64,14 @@ it("observes terrain sections against the showcase root and disconnects", () => 
   expect(options?.root).toBe(view.container.querySelector("main"));
   expect(options?.threshold).toEqual(TERRAIN_OBSERVER_THRESHOLDS);
   expect(observe).toHaveBeenCalledTimes(2);
+  const sections = view.container.querySelectorAll("section");
+  callback?.([
+    { target: sections[0], intersectionRect: { width: 10, height: 10 } },
+    { target: sections[1], intersectionRect: { width: 20, height: 20 } },
+  ] as unknown as IntersectionObserverEntry[], {} as IntersectionObserver);
+  expect(onChange).toHaveBeenLastCalledWith("positioning");
   view.unmount();
   expect(disconnect).toHaveBeenCalled();
-  vi.unstubAllGlobals();
 });
 
 it("falls back to positioning when IntersectionObserver is unavailable", () => {
@@ -71,7 +85,9 @@ it("falls back to positioning when IntersectionObserver is unavailable", () => {
   render(<Harness />);
   expect(onChange).toHaveBeenNthCalledWith(1, "hidden");
   expect(onChange).toHaveBeenLastCalledWith("positioning");
-  vi.unstubAllGlobals();
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});

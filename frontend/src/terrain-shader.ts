@@ -10,8 +10,7 @@ export const TERRAIN_FRAGMENT_SHADER = `
   precision highp float;
   varying vec2 vUv;
   uniform vec2 uResolution;
-  uniform float uTime;
-  uniform float uSpeed;
+  uniform float uDrift;
   uniform float uContourDensity;
   uniform float uLineStrength;
   uniform float uOpacity;
@@ -48,22 +47,32 @@ export const TERRAIN_FRAGMENT_SHADER = `
     return value;
   }
 
+  vec3 terrainPalette(float value) {
+    if (value < 0.333333) {
+      return mix(uColor0, uColor1, value * 3.0);
+    }
+    if (value < 0.666667) {
+      return mix(uColor1, uColor2, (value - 0.333333) * 3.0);
+    }
+    return mix(uColor2, uColor3, (value - 0.666667) * 3.0);
+  }
+
   void main() {
     float aspect = uResolution.x / max(uResolution.y, 1.0);
     vec2 point = (vUv - 0.5) * vec2(aspect, 1.0);
-    float drift = uTime * uSpeed;
+    float drift = uDrift;
     vec2 warp = vec2(
       fbm(point * 1.45 + vec2(drift * 0.13, -drift * 0.09)),
       fbm(point * 1.35 + vec2(8.7 - drift * 0.08, 4.1 + drift * 0.11))
     ) - 0.5;
     float height = clamp(fbm(point * 2.05 + warp * 1.55 + vec2(drift * 0.08, -drift * 0.05)), 0.0, 1.0);
-    vec3 lower = mix(uColor0, uColor1, smoothstep(0.08, 0.38, height));
-    vec3 upper = mix(uColor2, uColor3, smoothstep(0.62, 0.94, height));
-    vec3 color = mix(lower, upper, smoothstep(0.38, 0.68, height));
-    float contourPosition = fract(height * uContourDensity);
+    float terraceCount = 9.0;
+    float terrace = floor(min(height, 0.99999) * terraceCount) / (terraceCount - 1.0);
+    vec3 color = terrainPalette(terrace);
+    float contourPosition = fract(height * uContourDensity * 2.0);
     float contourDistance = min(contourPosition, 1.0 - contourPosition);
-    float contour = 1.0 - smoothstep(0.006, 0.028, contourDistance);
-    color = mix(color, uLineColor, contour * uLineStrength);
+    float contour = 1.0 - smoothstep(0.005, 0.024, contourDistance);
+    color = mix(color, uLineColor, contour * min(uLineStrength * 1.65, 0.55));
     gl_FragColor = vec4(color, uOpacity);
   }
 `;

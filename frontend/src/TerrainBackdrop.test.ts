@@ -116,6 +116,12 @@ function latestColor0() {
   return (mesh.material.uniforms.uColor0.value as THREE.Color).toArray();
 }
 
+function latestDrift() {
+  const scene = threeMocks.onscreenRender.mock.calls.at(-1)?.[0] as THREE.Scene;
+  const mesh = scene.children[0] as THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+  return mesh.material.uniforms.uDrift.value as number;
+}
+
 describe("TerrainBackdrop", () => {
   it("mounts one inert WebGL canvas with a stable instance id", () => {
     const { rerender } = render(createElement(TerrainBackdrop, { view: "showcase", preset: "hidden", risk: "unknown" }));
@@ -146,6 +152,13 @@ describe("TerrainBackdrop", () => {
     expect(threeMocks.onscreenRender).toHaveBeenCalledTimes(1);
     rafCallback?.(nowMs + 34);
     expect(threeMocks.onscreenRender).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a 30 fps cadence on a 120 Hz animation clock", () => {
+    render(createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }));
+    for (let step = 1; step <= 120; step += 1) rafCallback?.(nowMs + step * (1000 / 120));
+    expect(threeMocks.onscreenRender.mock.calls.length).toBeGreaterThanOrEqual(30);
+    expect(threeMocks.onscreenRender.mock.calls.length).toBeLessThanOrEqual(31);
   });
 
   it("uses a static fallback when WebGL construction fails", () => {
@@ -295,6 +308,17 @@ describe("TerrainBackdrop", () => {
     expect(latestColor0()).not.toEqual(expectedColor);
     rafCallback?.(nowMs + 700);
     expect(latestColor0()).toEqual(expectedColor);
+  });
+
+  it("integrates drift without uptime-amplified phase jumps when speed changes", () => {
+    const view = render(createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }));
+    for (let step = 1; step <= 1200; step += 1) rafCallback?.(nowMs + step * 100);
+    const beforeTransition = latestDrift();
+    view.rerender(createElement(TerrainBackdrop, { view: "showcase", preset: "pain", risk: "unknown" }));
+    for (let step = 1; step <= 7; step += 1) rafCallback?.(nowMs + 120000 + step * 100);
+    const afterTransition = latestDrift();
+    expect(afterTransition).toBeGreaterThan(beforeTransition);
+    expect(afterTransition - beforeTransition).toBeLessThan(0.05);
   });
 
   it("releases animation, observers, geometry, material and renderer on cleanup", () => {

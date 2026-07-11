@@ -20,8 +20,7 @@ type TerrainBackdropProps = {
 
 type TerrainUniforms = {
   uResolution: { value: THREE.Vector2 };
-  uTime: { value: number };
-  uSpeed: { value: number };
+  uDrift: { value: number };
   uContourDensity: { value: number };
   uLineStrength: { value: number };
   uOpacity: { value: number };
@@ -35,12 +34,12 @@ type TerrainUniforms = {
 type TerrainSubmitResult = "blocked" | "throttled" | "submitted" | "failed";
 
 const FRAME_INTERVAL_MS = 1000 / 30;
+const FRAME_EARLY_TOLERANCE_MS = 0.5;
 const smoothstep = (value: number) => value * value * (3 - 2 * value);
 const setColor = (color: THREE.Color, rgb: readonly [number, number, number]) => color.setRGB(rgb[0], rgb[1], rgb[2]);
 
-function applyTarget(uniforms: TerrainUniforms, target: TerrainTarget, simulationMs: number) {
-  uniforms.uTime.value = simulationMs / 1000;
-  uniforms.uSpeed.value = target.speed;
+function applyTarget(uniforms: TerrainUniforms, target: TerrainTarget, drift: number) {
+  uniforms.uDrift.value = drift;
   uniforms.uContourDensity.value = target.contourDensity;
   uniforms.uLineStrength.value = target.lineStrength;
   uniforms.uOpacity.value = target.opacity;
@@ -57,6 +56,7 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
   const currentTargetRef = useRef<TerrainTarget>(initialTargetRef.current);
   const transitionRef = useRef({ from: initialTargetRef.current, to: initialTargetRef.current, startedAt: 0 });
   const simulationMsRef = useRef(0);
+  const driftRef = useRef(0);
   const drawStaticRef = useRef<(() => void) | null>(null);
   const [fallback, setFallback] = useState(false);
   const instanceId = useId().replace(/:/g, "-");
@@ -89,6 +89,7 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
     let reduced = false;
     let lastTick = performance.now();
     let lastSubmit = Number.NEGATIVE_INFINITY;
+    let nextSubmitAt = Number.NEGATIVE_INFINITY;
 
     const resize = () => {
       if (disposed || !uniforms) return;
@@ -132,18 +133,26 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
       setFallback(true);
     };
 
-    const submit = (now: number): Exclude<TerrainSubmitResult, "failed"> => {
-      if (disposed || document.hidden || !renderer || !scene || !camera || !uniforms) return "blocked";
+    const syncCurrentTarget = () => {
       const transition = transitionRef.current;
       const progress = Math.min(1, Math.max(0, (simulationMsRef.current - transition.startedAt) / TERRAIN_TRANSITION_MS));
       currentTargetRef.current = interpolateTerrainTarget(transition.from, transition.to, smoothstep(progress));
-      const invisible = transition.to.opacity === 0 && currentTargetRef.current.opacity < 0.001;
+      return currentTargetRef.current;
+    };
+
+    const submit = (now: number): Exclude<TerrainSubmitResult, "failed"> => {
+      if (disposed || document.hidden || !renderer || !scene || !camera || !uniforms) return "blocked";
+      syncCurrentTarget();
+      const invisible = transitionRef.current.to.opacity === 0 && currentTargetRef.current.opacity < 0.001;
       if (invisible) return "blocked";
-      if (now - lastSubmit < FRAME_INTERVAL_MS) return "throttled";
-      applyTarget(uniforms, currentTargetRef.current, simulationMsRef.current);
+      if (now + FRAME_EARLY_TOLERANCE_MS < nextSubmitAt) return "throttled";
+      applyTarget(uniforms, currentTargetRef.current, driftRef.current);
       renderer.render(scene, camera);
       if (shaderFailed) throw new Error("Terrain shader compilation failed");
       lastSubmit = now;
+      nextSubmitAt = Number.isFinite(nextSubmitAt)
+        ? Math.max(nextSubmitAt + FRAME_INTERVAL_MS, now + FRAME_INTERVAL_MS)
+        : now + FRAME_INTERVAL_MS;
       return "submitted";
     };
 
@@ -188,7 +197,10 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
       if (disposed) return;
       const delta = document.hidden ? 0 : Math.min(Math.max(now - lastTick, 0), 100);
       lastTick = now;
+      const previousSpeed = currentTargetRef.current.speed;
       simulationMsRef.current += delta;
+      const nextTarget = syncCurrentTarget();
+      driftRef.current += ((previousSpeed + nextTarget.speed) * 0.5 * delta) / 1000;
       if (submitSafely(now) === "failed") return;
       if (!disposed) frameId = requestAnimationFrame(tick);
     }
@@ -230,8 +242,7 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
       geometry = new THREE.PlaneGeometry(2, 2);
       uniforms = {
         uResolution: { value: new THREE.Vector2(1, 1) },
-        uTime: { value: 0 },
-        uSpeed: { value: initialTargetRef.current.speed },
+        uDrift: { value: 0 },
         uContourDensity: { value: initialTargetRef.current.contourDensity },
         uLineStrength: { value: initialTargetRef.current.lineStrength },
         uOpacity: { value: initialTargetRef.current.opacity },

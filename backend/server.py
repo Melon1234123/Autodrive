@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -27,7 +28,16 @@ PUBLIC_ROOT = (REPO_ROOT / "frontend" / "public").resolve()
 SCENE_MANIFEST = (PUBLIC_ROOT / "scenes.json").resolve()
 load_dotenv(BACKEND_DIR / ".env")
 
-app = FastAPI(title="Autodrive AI Diagnosis Backend")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    try:
+        yield
+    finally:
+        diagnosis_jobs.shutdown(wait=True)
+
+
+app = FastAPI(title="Autodrive AI Diagnosis Backend", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import threading
 import uuid
 from collections import deque
@@ -11,6 +12,8 @@ from typing import Any, Callable, Deque, Dict, Optional, Tuple
 
 from autodrive_harness import DiagnosisProgress
 
+
+logger = logging.getLogger(__name__)
 
 RunPipeline = Callable[[str, str, Callable[[DiagnosisProgress], None]], Any]
 
@@ -47,6 +50,7 @@ class DiagnosisJobManager:
         self._dedupe: Dict[Tuple[str, str], str] = {}
         self._completed: Deque[str] = deque()
         self._lock = threading.RLock()
+        self._shutdown = False
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="diagnosis")
 
     @staticmethod
@@ -64,6 +68,8 @@ class DiagnosisJobManager:
     def create(self, scene_key: str, data_version: str) -> DiagnosisJobRecord:
         key = (scene_key, data_version)
         with self._lock:
+            if self._shutdown:
+                raise RuntimeError("诊断任务管理器已关闭")
             existing_job_id = self._dedupe.get(key)
             if existing_job_id is not None:
                 existing = self._jobs.get(existing_job_id)
@@ -79,6 +85,11 @@ class DiagnosisJobManager:
             self._dedupe[key] = record.job_id
             self._executor.submit(self._execute, record.job_id)
             return self._copy_record(record)
+
+    def shutdown(self, wait: bool = True) -> None:
+        with self._lock:
+            self._shutdown = True
+        self._executor.shutdown(wait=wait)
 
     def get(self, job_id: str) -> Optional[DiagnosisJobRecord]:
         with self._lock:
@@ -125,6 +136,7 @@ class DiagnosisJobManager:
             )
             serialized_report = self._serialize_report(report)
         except Exception:
+            logger.exception("diagnosis pipeline failed for job %s", job_id)
             with self._lock:
                 record = self._jobs.get(job_id)
                 if record is not None:

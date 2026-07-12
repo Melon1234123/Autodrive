@@ -41,8 +41,11 @@ def client(monkeypatch):
     manager = DiagnosisJobManager(run_pipeline=server.run_diagnosis_pipeline, max_completed=5)
     monkeypatch.setattr(server, "diagnosis_jobs", manager)
     monkeypatch.setattr(server, "OPENAI_API_KEY", "")
-    with TestClient(server.app) as test_client:
-        yield test_client
+    try:
+        with TestClient(server.app) as test_client:
+            yield test_client
+    finally:
+        manager.shutdown(wait=True)
 
 
 def test_job_progress_and_complete_report_are_serializable(client):
@@ -88,13 +91,14 @@ def test_unknown_job_is_404_with_safe_chinese_error(client):
     assert "Traceback" not in detail
 
 
-def test_create_accepts_exactly_the_ten_catalog_scenes(client):
-    server.diagnosis_jobs = DiagnosisJobManager(
+def test_create_accepts_exactly_the_ten_catalog_scenes(client, monkeypatch):
+    manager = DiagnosisJobManager(
         run_pipeline=lambda scene_key, data_version, _progress: {
             "scene_name": scene_key,
             "data_version": data_version,
         }
     )
+    monkeypatch.setattr(server, "diagnosis_jobs", manager)
     for scene_key in CATALOG_SCENES:
         response = client.post(
             "/api/v1/diagnoses",
@@ -150,3 +154,21 @@ def test_legacy_http_and_websocket_routes_remain_available(client):
         result = websocket.receive_json()
     assert result["riskLevel"] == "low"
     assert result["mode"] in {"model", "fallback"}
+
+
+def test_app_lifespan_shuts_down_the_active_diagnosis_manager(monkeypatch):
+    manager = DiagnosisJobManager(
+        run_pipeline=lambda scene_key, _data_version, _progress: {"scene_name": scene_key}
+    )
+    monkeypatch.setattr(server, "diagnosis_jobs", manager)
+
+    with TestClient(server.app) as test_client:
+        assert test_client.get("/health").status_code == 200
+        created = test_client.post(
+            "/api/v1/diagnoses",
+            json={"sceneKey": "default", "dataVersion": "lifespan-v1"},
+        ).json()
+
+    assert manager.get(created["jobId"]).stage == "complete"
+    with pytest.raises(RuntimeError, match="已关闭"):
+        manager.create("default", "lifespan-v1")

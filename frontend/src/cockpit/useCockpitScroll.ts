@@ -132,10 +132,11 @@ export function useCockpitScroll({
       const current = currentScreen();
       if (!current) return false;
       const atTop = reportAtTop();
+      if (current === "diagnosis" && reportExpandedRef.current && !atTop) return false;
       if (
         (command === "previous" || command === "next") &&
         current === "diagnosis" && reportExpandedRef.current &&
-        (command === "next" || !atTop)
+        command === "next"
       ) {
         return false;
       }

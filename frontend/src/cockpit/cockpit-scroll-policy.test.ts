@@ -39,6 +39,23 @@ function setOffsetTop(element: Element, offsetTop: number) {
   Object.defineProperty(element, "offsetTop", { configurable: true, value: offsetTop });
 }
 
+function setRect(element: Element, top: number, height: number) {
+  Object.defineProperty(element, "getBoundingClientRect", {
+    configurable: true,
+    value: () => ({
+      top,
+      bottom: top + height,
+      left: 0,
+      right: 100,
+      width: 100,
+      height,
+      x: 0,
+      y: top,
+      toJSON: () => ({}),
+    }),
+  });
+}
+
 function installCockpitGeometry(container: HTMLElement) {
   const root = container.querySelector<HTMLElement>("[data-testid='root']")!;
   const entry = container.querySelector<HTMLElement>("[data-cockpit-screen='entry']")!;
@@ -180,6 +197,27 @@ describe("useCockpitScroll", () => {
     expect(fireEvent.keyDown(window, { key: "End", repeat: true, cancelable: true })).toBe(true);
     expect(scrolls[0]).toHaveBeenCalledTimes(1);
     expect(scrolls[2]).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves every keyboard paging command native below an expanded report header", () => {
+    const onScreenChange = vi.fn();
+    const { container } = render(createElement(Harness, { reportExpanded: true, onScreenChange }));
+    const { root, entry, live, diagnosis, evidenceHeader, scrolls } = installCockpitGeometry(container);
+    root.scrollTop = 2300;
+    setRect(root, 100, 1000);
+    setRect(entry, -2200, 1000);
+    setRect(live, -1200, 1000);
+    setRect(diagnosis, -200, 1000);
+    setRect(evidenceHeader, -200, 40);
+    fireEvent.scroll(root);
+    expect(root).toHaveAttribute("data-report-reading", "true");
+    onScreenChange.mockClear();
+
+    for (const key of ["Home", "End", "ArrowUp", "PageDown", " "]) {
+      expect(fireEvent.keyDown(window, { key, cancelable: true })).toBe(true);
+    }
+    expect(scrolls.every((scroll) => scroll.mock.calls.length === 0)).toBe(true);
+    expect(onScreenChange).not.toHaveBeenCalled();
   });
 
   it("ignores modified, non-cancelable, and Lenis-prevent wheel input", () => {

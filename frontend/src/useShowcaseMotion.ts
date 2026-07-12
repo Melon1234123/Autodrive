@@ -53,7 +53,6 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
   const playOnMountRef = useRef(playOpening);
   const completeRef = useRef(onOpeningComplete);
   const openingResolvedRef = useRef(false);
-  const enteredSectionsRef = useRef(new WeakSet<HTMLElement>());
   completeRef.current = onOpeningComplete;
 
   useLayoutEffect(() => {
@@ -283,8 +282,27 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
             opening?.setAttribute("hidden", "");
           }
 
+          if (hero) {
+            const heroReturnTimeline = gsap.timeline({ paused: true, defaults: { ease: "power3.out" } });
+            heroReturnTimeline
+              .fromTo(heroLines, { yPercent: 112, scaleY: .82 }, { yPercent: 0, scaleY: 1, duration: 1.22, stagger: .09, ease: "power4.out", immediateRender: false })
+              .fromTo(hero.querySelector(".kicker"), { autoAlpha: 0, y: 30 }, { autoAlpha: 1, y: 0, duration: .75, immediateRender: false }, "<+.08")
+              .fromTo(hero.querySelector(".hero-copy"), { autoAlpha: 0, y: 34 }, { autoAlpha: 1, y: 0, duration: .88, immediateRender: false }, "<+.12")
+              .fromTo(hero.querySelector(".hero-actions"), { autoAlpha: 0, y: 38 }, { autoAlpha: 1, y: 0, duration: .88, immediateRender: false }, "<+.12")
+              .fromTo(hero.querySelector(".hero-foot"), { autoAlpha: 0, y: 24 }, { autoAlpha: 1, y: 0, duration: .8, immediateRender: false }, "<+.12");
+
+            ScrollTrigger.create({
+              trigger: hero,
+              scroller: root,
+              start: "top top",
+              end: "bottom 24%",
+              onEnterBack: () => {
+                if (runtimeActive) heroReturnTimeline.restart();
+              },
+            });
+          }
+
           root.querySelectorAll<HTMLElement>("[data-motion-section]").forEach((section) => {
-            if (enteredSectionsRef.current.has(section)) return;
             const index = section.querySelector<HTMLElement>("[data-motion-index]");
             const lines = Array.from(section.querySelectorAll<HTMLElement>("[data-motion-line]"));
             const copies = Array.from(section.querySelectorAll<HTMLElement>("[data-motion-copy]"));
@@ -297,10 +315,8 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
                 trigger: section,
                 scroller: root,
                 start: "top 76%",
-                once: true,
-                onEnter: () => {
-                  if (runtimeActive) enteredSectionsRef.current.add(section);
-                },
+                end: "bottom 24%",
+                toggleActions: "restart none restart none",
               },
               defaults: { ease: "power3.out" },
             });

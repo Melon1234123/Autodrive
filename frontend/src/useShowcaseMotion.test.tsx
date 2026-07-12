@@ -10,20 +10,37 @@ const motionMocks = vi.hoisted(() => {
   const timelineOptions: Array<Record<string, unknown>> = [];
   const timelineTargets: unknown[] = [];
   const timelineFromToCalls: unknown[][] = [];
+  const timelineInstances: Array<{
+    options: Record<string, unknown>;
+    targets: unknown[];
+    fromToCalls: unknown[][];
+    chain: {
+      fromTo: ReturnType<typeof vi.fn>;
+      set: ReturnType<typeof vi.fn>;
+      restart: ReturnType<typeof vi.fn>;
+    };
+  }> = [];
   const makeTimeline = (options: Record<string, unknown> = {}) => {
     timelineOptions.push(options);
+    const targets: unknown[] = [];
+    const fromToCalls: unknown[][] = [];
     const chain = {
       fromTo: vi.fn(),
       set: vi.fn(),
+      restart: vi.fn(),
     };
     chain.fromTo.mockImplementation((...args: unknown[]) => {
-      const [targets] = args;
-      timelineTargets.push(targets);
+      const [target] = args;
+      targets.push(target);
+      fromToCalls.push(args);
+      timelineTargets.push(target);
       timelineFromToCalls.push(args);
       if (motionMocks.throwOnTween) throw new Error("tween init failed");
       return chain;
     });
     chain.set.mockReturnValue(chain);
+    chain.restart.mockReturnValue(chain);
+    timelineInstances.push({ options, targets, fromToCalls, chain });
     return chain;
   };
 
@@ -51,10 +68,12 @@ const motionMocks = vi.hoisted(() => {
     timelineOptions,
     timelineTargets,
     timelineFromToCalls,
+    timelineInstances,
     tickerAdd: vi.fn(),
     tickerRemove: vi.fn(),
     scrollUpdate: vi.fn(),
     scrollRefresh: vi.fn(),
+    scrollCreate: vi.fn(),
     scrollKillAll: vi.fn(),
     lenisConstruct: vi.fn(),
     lenisOn: vi.fn(),
@@ -100,6 +119,7 @@ vi.mock("gsap/ScrollTrigger", () => ({
   ScrollTrigger: {
     update: motionMocks.scrollUpdate,
     refresh: motionMocks.scrollRefresh,
+    create: motionMocks.scrollCreate,
     killAll: motionMocks.scrollKillAll,
   },
 }));
@@ -206,6 +226,9 @@ function Harness({
         <section className="showcase-hero" data-motion-hero>
           <div className="kicker" />
           <div data-motion-line />
+          <p className="hero-copy" />
+          <div className="hero-actions" />
+          <div className="hero-foot" />
           {includeHeroMedia && <video data-motion-hero-media />}
         </section>
         <section data-motion-section id="demo">
@@ -299,6 +322,7 @@ beforeEach(() => {
   motionMocks.timelineOptions.length = 0;
   motionMocks.timelineTargets.length = 0;
   motionMocks.timelineFromToCalls.length = 0;
+  motionMocks.timelineInstances.length = 0;
   motionMocks.lenisIsLocked = false;
   motionMocks.lenisOptions = null;
   motionMocks.snapOptions = null;
@@ -416,20 +440,25 @@ it.each([
 it.each([
   ["reduced motion", "reducedQuery", true],
   ["desktop gate", "desktopQuery", false],
-] as const)("does not rebuild an entered section after the %s cycles while retaining unseen section timelines", (_label, queryName, disabledValue) => {
+] as const)("rebuilds every section with bidirectional replay after the %s cycles", (_label, queryName, disabledValue) => {
   const media = installMatchMedia({ reduced: false, desktop: true });
   const view = render(<Harness playOpening={false} seedHiddenStyles />);
   const enteredSection = view.container.querySelector("#demo")!;
   const unseenSection = view.container.querySelector("#unseen-section")!;
   const enteredCopy = enteredSection.querySelector<HTMLElement>("[data-motion-copy]")!;
-  const enteredTrigger = sectionTimelineOptions(enteredSection)[0].scrollTrigger as {
-    onEnter?: () => void;
-  };
 
-  expect(sectionTimelineOptions(enteredSection)).toHaveLength(1);
-  expect(sectionTimelineOptions(unseenSection)).toHaveLength(1);
-  expect(enteredTrigger.onEnter).toEqual(expect.any(Function));
-  act(() => enteredTrigger.onEnter?.());
+  for (const section of [enteredSection, unseenSection]) {
+    const triggers = sectionTimelineOptions(section).map((options) => (
+      options.scrollTrigger as Record<string, unknown>
+    ));
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0]).toEqual(expect.objectContaining({
+      start: "top 76%",
+      end: "bottom 24%",
+      toggleActions: "restart none restart none",
+    }));
+    expect(triggers[0]).not.toHaveProperty("once");
+  }
 
   act(() => media[queryName].setMatches(disabledValue));
   expect(enteredCopy.style.opacity).toBe("");
@@ -437,9 +466,47 @@ it.each([
 
   act(() => media[queryName].setMatches(!disabledValue));
 
-  expect(sectionTimelineOptions(enteredSection)).toHaveLength(1);
+  expect(sectionTimelineOptions(enteredSection)).toHaveLength(2);
   expect(sectionTimelineOptions(unseenSection)).toHaveLength(2);
   expect(view.container.querySelector("main")).toHaveClass("showcase-motion-active");
+});
+
+it("replays only Hero content when returning upward", () => {
+  installMatchMedia({ reduced: false, desktop: true });
+  const view = render(<Harness playOpening={false} />);
+  const root = view.container.querySelector("main") as HTMLElement;
+  const hero = root.querySelector("[data-motion-hero]");
+  const heroTrigger = motionMocks.scrollCreate.mock.calls.find(([options]) => (
+    (options as { trigger?: Element }).trigger === hero
+  ))?.[0] as { onEnterBack?: () => void };
+  const heroReturn = motionMocks.timelineInstances.find(({ options }) => options.paused === true);
+
+  expect(heroTrigger).toEqual(expect.objectContaining({
+    trigger: hero,
+    scroller: root,
+    start: "top top",
+    end: "bottom 24%",
+    onEnterBack: expect.any(Function),
+  }));
+  expect(heroReturn).toBeDefined();
+  expect(heroReturn?.targets).toEqual(expect.arrayContaining([
+    [root.querySelector("[data-motion-line]")],
+    root.querySelector(".showcase-hero .kicker"),
+    root.querySelector(".hero-copy"),
+    root.querySelector(".hero-actions"),
+    root.querySelector(".hero-foot"),
+  ]));
+  expect(heroReturn?.targets).not.toContain(root.querySelector(".showcase-nav-glass"));
+  expect(heroReturn?.targets).not.toContain(root.querySelector("[data-motion-opening]"));
+  expect(heroReturn?.targets).not.toContain(root.querySelector("[data-motion-opening-panel]"));
+  expect(heroReturn?.targets).not.toContain(root.querySelector("[data-motion-hero-media]"));
+  expect(heroReturn?.fromToCalls).toHaveLength(5);
+  for (const call of heroReturn?.fromToCalls ?? []) {
+    expect(call[2]).toEqual(expect.objectContaining({ immediateRender: false }));
+  }
+
+  heroTrigger.onEnterBack?.();
+  expect(heroReturn?.chain.restart).toHaveBeenCalledTimes(1);
 });
 
 it("keeps the opening cadence within the 2.8 to 3.2 second target", () => {

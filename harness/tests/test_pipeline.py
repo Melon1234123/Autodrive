@@ -17,8 +17,12 @@ def test_pipeline_emits_ordered_progress_and_is_deterministic(real_catalog):
 
 def test_pipeline_includes_enhancement_stage_only_when_requested(real_catalog):
     class IdentityEnhancer:
-        def enhance(self, payload):
-            return payload
+        def plan(self, payload):
+            return {
+                "style": "concise",
+                "emphasized_finding_ids": [payload["key_findings"][0]["id"]],
+                "emphasized_recommendation_ids": [payload["recommendations"][0]["id"]],
+            }
 
     stages = []
     report = run_scene_diagnosis(
@@ -50,9 +54,9 @@ def test_pipeline_computes_causal_chains_once(real_catalog, monkeypatch):
     original = pipeline.build_causal_chains
     calls = []
 
-    def counted(context):
+    def counted(context, *args, **kwargs):
         calls.append(context.bundle.scene_key)
-        return original(context)
+        return original(context, *args, **kwargs)
 
     monkeypatch.setattr(pipeline, "build_causal_chains", counted)
     pipeline.run_scene_diagnosis(real_catalog, "default", "test-v1")

@@ -26,7 +26,7 @@ def test_event_miner_merges_short_low_risk_gap_and_keeps_peak_anchor():
     assert len(episodes) == 1
     assert episodes[0].peak_time == 0.2
     assert episodes[0].risk == "high"
-    assert episodes[0].evidence_ids == ["ev-0001", "ev-0002", "ev-0003"]
+    assert episodes[0].evidence_ids == []
 
 
 def test_event_miner_drops_short_isolated_pulse():

@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-from copy import deepcopy
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .catalog import APPROVED_SCENE_NAMES
 from .causality import build_causal_chains
 from .models import (
     AnalysisSection,
     CausalChain,
+    DataQualityFinding,
     DiagnosisContext,
     DiagnosisReport,
     EvidenceRef,
@@ -17,6 +17,8 @@ from .models import (
     RAW_SCENE_ID,
     Recommendation,
     RegressionRecommendation,
+    RiskEpisode,
+    TimelineSample,
 )
 
 
@@ -31,29 +33,9 @@ def _risk_label(value: str) -> str:
     return {"high": "高", "medium": "中"}[value]
 
 
-def protected_projection(report: DiagnosisReport) -> Dict:
-    protected = deepcopy(report.model_dump(mode="json"))
-    protected["generation_mode"] = "<narrative-allowed>"
-    protected["executive_summary"] = "<narrative-allowed>"
-    for finding in protected["key_findings"]:
-        finding["title"] = "<narrative-allowed>"
-        finding["summary"] = "<narrative-allowed>"
-    for section in (
-        "perception_analysis", "motion_control_analysis", "trajectory_analysis"
-    ):
-        protected[section]["summary"] = "<narrative-allowed>"
-    for chain in protected["causal_chains"]:
-        chain["mechanism"] = "<narrative-allowed>"
-        chain["possible_impact"] = "<narrative-allowed>"
-    for recommendation in protected["recommendations"]:
-        recommendation["action"] = "<narrative-allowed>"
-        recommendation["rationale"] = "<narrative-allowed>"
-    return protected
-
-
 def protected_fingerprint(report: DiagnosisReport) -> str:
     encoded = json.dumps(
-        protected_projection(report),
+        report.model_dump(mode="json"),
         sort_keys=True,
         ensure_ascii=False,
         separators=(",", ":"),
@@ -61,89 +43,145 @@ def protected_fingerprint(report: DiagnosisReport) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _evidence_index(context: DiagnosisContext) -> List[EvidenceRef]:
-    if context.episodes:
-        windows: Iterable[Tuple[List[str], float, float, float, str]] = (
-            (
-                episode.evidence_ids,
-                episode.start_time,
-                episode.end_time,
-                episode.peak_time,
-                _risk_label(episode.risk),
-            )
-            for episode in context.episodes
-        )
-    else:
-        start_time = context.samples[0].time if context.samples else 0.0
-        end_time = context.samples[-1].time if context.samples else 0.0
-        windows = [(["ev-0001", "ev-0002", "ev-0003"], start_time, end_time,
-                    start_time, "基线")]
+def _samples_in_window(
+    context: DiagnosisContext, start_time: float, end_time: float
+) -> List[TimelineSample]:
+    return [
+        sample for sample in context.samples
+        if start_time <= sample.time <= end_time
+    ]
 
+
+def _append_evidence(
+    evidence: List[EvidenceRef],
+    source: str,
+    provenance: str,
+    start_time: float,
+    end_time: float,
+    detail: str,
+) -> str:
+    evidence_id = f"ev-{len(evidence) + 1:04d}"
+    evidence.append(EvidenceRef(
+        id=evidence_id,
+        source=source,
+        provenance=provenance,
+        start_time=start_time,
+        end_time=end_time,
+        detail=detail,
+    ))
+    return evidence_id
+
+
+def _evidence_for_window(
+    samples: List[TimelineSample],
+    start_time: float,
+    end_time: float,
+    label: str,
+    evidence: List[EvidenceRef],
+) -> List[str]:
+    evidence_ids: List[str] = []
+    if any(sample.perception.value.objects for sample in samples):
+        evidence_ids.append(_append_evidence(
+            evidence, "perception", "real-derived", start_time, end_time,
+            f"{label}时间窗内存在感知目标。",
+        ))
+    if samples:
+        evidence_ids.append(_append_evidence(
+            evidence, "telemetry", "estimated", start_time, end_time,
+            f"{label}时间窗内存在对齐遥测样本。",
+        ))
+    if any(sample.perception.value.plannedPath for sample in samples):
+        evidence_ids.append(_append_evidence(
+            evidence, "trajectory", "demo-visualization", start_time, end_time,
+            f"{label}时间窗内存在非空演示计划路径。",
+        ))
+    if any(sample.lidar.value is not None for sample in samples):
+        evidence_ids.append(_append_evidence(
+            evidence, "lidar", "real", start_time, end_time,
+            f"{label}时间窗内存在 LiDAR 索引帧。",
+        ))
+    return evidence_ids
+
+
+def prepare_report_context(
+    context: DiagnosisContext,
+) -> Tuple[DiagnosisContext, List[EvidenceRef]]:
     evidence: List[EvidenceRef] = []
-    for evidence_ids, start_time, end_time, peak_time, risk_label in windows:
-        if len(evidence_ids) != 3:
-            raise ValueError("each episode must contain three modality evidence ids")
-        details = [
-            ("perception", "real-derived", f"{risk_label}窗感知目标证据"),
-            ("telemetry", "estimated", f"{risk_label}窗运动与控制证据"),
-            ("trajectory", "demo-visualization", f"{risk_label}窗演示轨迹证据"),
-        ]
-        for evidence_id, (source, provenance, detail) in zip(evidence_ids, details):
-            evidence.append(EvidenceRef(
-                id=evidence_id,
-                source=source,
-                provenance=provenance,
-                start_time=start_time,
-                end_time=end_time,
-                detail=f"{detail}，峰值位于 {peak_time:.2f} 秒。",
-            ))
-    return evidence
+    episodes: List[RiskEpisode] = []
+    for episode in context.episodes:
+        samples = _samples_in_window(context, episode.start_time, episode.end_time)
+        evidence_ids = _evidence_for_window(
+            samples,
+            episode.start_time,
+            episode.end_time,
+            f"{_risk_label(episode.risk)}风险",
+            evidence,
+        )
+        episodes.append(episode.model_copy(update={"evidence_ids": evidence_ids}))
+
+    if not episodes:
+        start_time = context.samples[0].time if context.samples else 0.0
+        end_time = context.samples[-1].time if context.samples else start_time
+        _evidence_for_window(
+            context.samples, start_time, end_time, "基线", evidence
+        )
+    return context.model_copy(update={"episodes": episodes}), evidence
 
 
 def _evidence_ids_by_source(evidence: List[EvidenceRef], source: str) -> List[str]:
     return [item.id for item in evidence if item.source == source]
 
 
-def _key_findings(context: DiagnosisContext) -> List[Finding]:
+def _key_findings(
+    context: DiagnosisContext, baseline_evidence_ids: List[str]
+) -> List[Finding]:
     if not context.episodes:
         return [Finding(
+            id="finding-0001",
             title="未检出持续风险事件",
             summary="在当前阈值与可用模态下，未检出超过最短持续时间的风险窗。",
             severity="info",
-            evidence_ids=["ev-0001"],
+            evidence_ids=baseline_evidence_ids,
         )]
     return [Finding(
+        id=f"finding-{index:04d}",
         title=f"{_risk_label(episode.risk)}风险事件",
         summary=episode.summary,
         severity=episode.risk,
         evidence_ids=episode.evidence_ids,
-    ) for episode in context.episodes]
+    ) for index, episode in enumerate(context.episodes, start=1)]
 
 
 def _recommendations(
-    context: DiagnosisContext, evidence_ids: List[str]
+    context: DiagnosisContext, evidence: List[EvidenceRef]
 ) -> List[Recommendation]:
     recommendations: List[Recommendation] = []
+    telemetry_ids = _evidence_ids_by_source(evidence, "telemetry")
+    perception_ids = _evidence_ids_by_source(evidence, "perception")
+    trajectory_ids = _evidence_ids_by_source(evidence, "trajectory")
     if any(episode.control_conflict for episode in context.episodes):
         recommendations.append(Recommendation(
+            id=f"recommendation-{len(recommendations) + 1:04d}",
             priority="high",
             action="在制动请求生效时增加油门抑制与控制意图互斥检查。",
             rationale="当前时间窗出现了制动与油门重叠的可观测事实。",
-            evidence_ids=evidence_ids,
+            evidence_ids=telemetry_ids,
         ))
-    if any(episode.risk == "high" for episode in context.episodes):
+    if any(episode.risk == "high" for episode in context.episodes) and perception_ids:
         recommendations.append(Recommendation(
+            id=f"recommendation-{len(recommendations) + 1:04d}",
             priority="high",
             action="扩充高风险目标时间窗的减速与避让回归用例。",
             rationale="高风险目标在连续帧中持续存在，需验证决策的时序稳定性。",
-            evidence_ids=evidence_ids,
+            evidence_ids=perception_ids + trajectory_ids,
         ))
     if not recommendations:
         recommendations.append(Recommendation(
+            id="recommendation-0001",
             priority="medium",
             action="保留当前场景作为无持续风险的基线回归用例。",
             rationale="基线场景可用于监测规则阈值调整后的误报。",
-            evidence_ids=evidence_ids,
+            evidence_ids=[item.id for item in evidence],
         ))
     return recommendations
 
@@ -164,6 +202,56 @@ def _regression_tests(context: DiagnosisContext) -> List[RegressionRecommendatio
             rationale="直接覆盖本场景已观测的控制冲突。",
         ))
     return tests
+
+
+def _data_quality(
+    context: DiagnosisContext, available_sources: set
+) -> List[DataQualityFinding]:
+    findings = list(context.validation.findings)
+    existing_codes = {item.code for item in findings}
+    missing = [
+        ("perception", "perception-objects-unavailable", ["perception"],
+         "事件窗内缺少感知目标，感知风险不可评估。"),
+        ("telemetry", "telemetry-unavailable", ["telemetry", "motion", "control"],
+         "事件窗内缺少遥测样本，运动与控制不可评估。"),
+        ("trajectory", "trajectory-unavailable", ["trajectory"],
+         "事件窗内缺少非空计划路径，轨迹偏移不可评估。"),
+    ]
+    for source, code, modules, message in missing:
+        if source not in available_sources and code not in existing_codes:
+            findings.append(DataQualityFinding(
+                code=code,
+                severity="info",
+                affected_modules=modules,
+                message=message,
+            ))
+    return findings
+
+
+def _limitations(available_sources: set) -> List[str]:
+    limitations = list(STANDARD_LIMITATIONS)
+    unavailable = {
+        "perception": "事件窗内缺少感知目标，感知风险不可评估。",
+        "telemetry": "事件窗内缺少遥测样本，运动与控制不可评估。",
+        "trajectory": "事件窗内缺少非空计划路径，轨迹偏移不可评估。",
+    }
+    limitations.extend(
+        text for source, text in unavailable.items() if source not in available_sources
+    )
+    return limitations
+
+
+def _unavailable_section(source: str, metric_names: List[str]) -> AnalysisSection:
+    labels = {
+        "perception": "感知目标",
+        "telemetry": "运动与控制",
+        "trajectory": "轨迹偏移",
+    }
+    return AnalysisSection(
+        summary=f"事件窗内缺少可用证据，{labels[source]}不可评估。",
+        metrics={name: None for name in metric_names},
+        evidence_ids=[],
+    )
 
 
 def _referenced_evidence_ids(report: DiagnosisReport) -> List[str]:
@@ -188,9 +276,15 @@ def _referenced_evidence_ids(report: DiagnosisReport) -> List[str]:
 def validate_report_contract(report: DiagnosisReport) -> DiagnosisReport:
     if report.scene_name not in set(APPROVED_SCENE_NAMES.values()):
         raise ValueError("report scene_name is not an approved Chinese scene name")
-    serialized = report.model_dump_json()
-    if RAW_SCENE_ID.search(serialized):
+    if RAW_SCENE_ID.search(report.model_dump_json()):
         raise ValueError("diagnosis reports must not expose raw scene ids")
+
+    finding_ids = [item.id for item in report.key_findings]
+    recommendation_ids = [item.id for item in report.recommendations]
+    if len(finding_ids) != len(set(finding_ids)):
+        raise ValueError("finding ids must be unique")
+    if len(recommendation_ids) != len(set(recommendation_ids)):
+        raise ValueError("recommendation ids must be unique")
 
     evidence = {item.id: item for item in report.evidence_index}
     if len(evidence) != len(report.evidence_index):
@@ -222,52 +316,35 @@ def validate_report_contract(report: DiagnosisReport) -> DiagnosisReport:
     ]
     for section, source, provenance in section_contracts:
         if not section.evidence_ids:
-            raise ValueError(f"{source} analysis must reference evidence")
+            if "不可评估" not in section.summary:
+                raise ValueError(f"{source} analysis without evidence must be unavailable")
+            if any(value is not None for value in section.metrics.values()):
+                raise ValueError(f"{source} unavailable metrics must be null")
+            continue
         for evidence_id in section.evidence_ids:
             item = evidence[evidence_id]
             if item.source != source or item.provenance != provenance:
                 raise ValueError(f"{source} analysis references mismatched evidence")
-
-    required_episode_sources = {"perception", "telemetry", "trajectory"}
-    for episode in report.timeline:
-        sources = {evidence[item].source for item in episode.evidence_ids}
-        if sources != required_episode_sources:
-            raise ValueError(f"episode {episode.id} has incomplete modality evidence")
     return report
 
 
 def assemble_report(
     context: DiagnosisContext,
     causal_chains: Optional[List[CausalChain]] = None,
+    evidence_index: Optional[List[EvidenceRef]] = None,
 ) -> DiagnosisReport:
-    evidence_index = _evidence_index(context)
+    if evidence_index is None:
+        context, evidence_index = prepare_report_context(context)
     evidence_ids = [item.id for item in evidence_index]
-    perception_evidence_ids = _evidence_ids_by_source(evidence_index, "perception")
-    telemetry_evidence_ids = _evidence_ids_by_source(evidence_index, "telemetry")
-    trajectory_evidence_ids = _evidence_ids_by_source(evidence_index, "trajectory")
-    description = RAW_SCENE_ID.sub("内部场景", context.bundle.description)
-    high_count = sum(episode.risk == "high" for episode in context.episodes)
-    summary = (
-        f"本地确定性分析检出 {len(context.episodes)} 个持续风险事件，"
-        f"其中 {high_count} 个为高风险；综合风险分为 {context.scores.overall}。"
-    )
-    report = DiagnosisReport(
-        scene_name=context.bundle.scene_name,
-        data_version=context.data_version,
-        generation_mode="local-harness",
-        executive_summary=summary,
-        scene_overview={
-            "description": description,
-            "duration_seconds": context.features.duration,
-            "telemetry_samples": len(context.bundle.telemetry),
-            "perception_samples": len(context.bundle.perception),
-            "lidar_available": bool(context.bundle.lidar_index),
-        },
-        data_quality=context.validation.findings,
-        scores=context.scores,
-        key_findings=_key_findings(context),
-        timeline=context.episodes,
-        perception_analysis=AnalysisSection(
+    available_sources = {item.source for item in evidence_index}
+    perception_ids = _evidence_ids_by_source(evidence_index, "perception")
+    telemetry_ids = _evidence_ids_by_source(evidence_index, "telemetry")
+    trajectory_ids = _evidence_ids_by_source(evidence_index, "trajectory")
+    if causal_chains is None:
+        causal_chains = build_causal_chains(context, evidence_index)
+
+    perception_analysis = (
+        AnalysisSection(
             summary=(
                 f"单帧最多 {context.features.object_peak} 个目标，"
                 f"高风险目标峰值 {context.features.high_risk_object_peak} 个。"
@@ -277,9 +354,13 @@ def assemble_report(
                 "high_risk_object_peak": context.features.high_risk_object_peak,
                 "tracking_continuity": context.features.tracking_continuity,
             },
-            evidence_ids=perception_evidence_ids,
-        ),
-        motion_control_analysis=AnalysisSection(
+            evidence_ids=perception_ids,
+        ) if perception_ids else _unavailable_section(
+            "perception", ["object_peak", "high_risk_object_peak", "tracking_continuity"]
+        )
+    )
+    motion_analysis = (
+        AnalysisSection(
             summary=(
                 f"峰值车速 {context.features.peak_speed:.2f} km/h，"
                 f"制动油门重叠 {context.features.control_conflict_duration:.2f} 秒。"
@@ -290,20 +371,53 @@ def assemble_report(
                 "peak_abs_jerk": context.features.peak_abs_jerk,
                 "control_conflict_seconds": context.features.control_conflict_duration,
             },
-            evidence_ids=telemetry_evidence_ids,
-        ),
-        trajectory_analysis=AnalysisSection(
+            evidence_ids=telemetry_ids,
+        ) if telemetry_ids else _unavailable_section(
+            "telemetry", ["peak_speed_kmh", "peak_abs_accel", "peak_abs_jerk",
+                          "control_conflict_seconds"]
+        )
+    )
+    trajectory_analysis = (
+        AnalysisSection(
             summary=(
                 f"演示计划路径的峰值横向偏移为 "
                 f"{context.features.trajectory_deviation:.2f} 米。"
             ),
             metrics={"demo_path_lateral_deviation": context.features.trajectory_deviation},
-            evidence_ids=trajectory_evidence_ids,
+            evidence_ids=trajectory_ids,
+        ) if trajectory_ids else _unavailable_section(
+            "trajectory", ["demo_path_lateral_deviation"]
+        )
+    )
+
+    description = RAW_SCENE_ID.sub("内部场景", context.bundle.description)
+    high_count = sum(episode.risk == "high" for episode in context.episodes)
+    report = DiagnosisReport(
+        scene_name=context.bundle.scene_name,
+        data_version=context.data_version,
+        generation_mode="local-harness",
+        executive_summary=(
+            f"本地确定性分析检出 {len(context.episodes)} 个持续风险事件，"
+            f"其中 {high_count} 个为高风险；综合风险分为 {context.scores.overall}。"
         ),
-        causal_chains=causal_chains if causal_chains is not None else build_causal_chains(context),
-        recommendations=_recommendations(context, evidence_ids),
+        scene_overview={
+            "description": description,
+            "duration_seconds": context.features.duration,
+            "telemetry_samples": len(context.bundle.telemetry),
+            "perception_samples": len(context.bundle.perception),
+            "lidar_available": bool(context.bundle.lidar_index),
+        },
+        data_quality=_data_quality(context, available_sources),
+        scores=context.scores,
+        key_findings=_key_findings(context, evidence_ids),
+        timeline=context.episodes,
+        perception_analysis=perception_analysis,
+        motion_control_analysis=motion_analysis,
+        trajectory_analysis=trajectory_analysis,
+        causal_chains=causal_chains,
+        recommendations=_recommendations(context, evidence_index),
         regression_tests=_regression_tests(context),
         evidence_index=evidence_index,
-        limitations=STANDARD_LIMITATIONS,
+        limitations=_limitations(available_sources),
     )
     return validate_report_contract(report)

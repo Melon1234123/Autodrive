@@ -195,6 +195,7 @@ class RiskScores(StrictModel):
 
 
 class Finding(StrictModel):
+    id: str = Field(pattern=r"^finding-\d{4}$")
     title: str
     summary: str
     severity: Literal["info", "medium", "high"]
@@ -216,6 +217,7 @@ class CausalChain(StrictModel):
 
 
 class Recommendation(StrictModel):
+    id: str = Field(pattern=r"^recommendation-\d{4}$")
     priority: Literal["low", "medium", "high"]
     action: str
     rationale: str

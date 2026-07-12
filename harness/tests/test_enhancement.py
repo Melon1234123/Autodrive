@@ -8,7 +8,7 @@ class FakeEnhancer:
     def __init__(self, payload):
         self.payload = payload
 
-    def enhance(self, _local_payload):
+    def plan(self, _local_payload):
         if isinstance(self.payload, Exception):
             raise self.payload
         return self.payload
@@ -18,78 +18,77 @@ def local_report():
     return assemble_report(high_risk_context())
 
 
-def test_enhancer_rejects_protected_field_changes():
-    local = local_report()
-    malicious = local.model_copy(update={
-        "scores": local.scores.model_copy(update={"overall": 0})
-    })
-    assert enhance_report(local, FakeEnhancer(malicious.model_dump(mode="json"))) == local
+def valid_plan(local):
+    return {
+        "style": "expert",
+        "emphasized_finding_ids": [local.key_findings[0].id],
+        "emphasized_recommendation_ids": [local.recommendations[0].id],
+    }
 
 
-def test_enhancer_accepts_narrative_only_changes_and_marks_mode():
+def test_valid_structured_plan_uses_only_local_content_and_marks_mode():
     local = local_report()
-    candidate = local.model_copy(update={"executive_summary": "经模型改写的摘要。"})
-    enhanced = enhance_report(local, FakeEnhancer(candidate.model_dump(mode="json")))
-    assert enhanced.executive_summary == "经模型改写的摘要。"
+    enhanced = enhance_report(local, FakeEnhancer(valid_plan(local)))
     assert enhanced.generation_mode == "model-enhanced"
+    assert enhanced.executive_summary == f"专家视图：{local.executive_summary}"
+    assert enhanced.key_findings == local.key_findings
+    assert enhanced.recommendations == local.recommendations
     assert enhanced.scores == local.scores
+    assert enhanced.timeline == local.timeline
+    assert enhanced.evidence_index == local.evidence_index
 
 
-def test_enhancer_fails_closed_on_exception_or_raw_scene_id():
+def test_plan_fails_closed_on_exception_unknown_style_or_invalid_local_id():
     local = local_report()
     assert enhance_report(local, FakeEnhancer(RuntimeError("offline"))) == local
-    candidate = local.model_copy(update={"executive_summary": "raw scene-0796"})
-    assert enhance_report(local, FakeEnhancer(candidate.model_dump(mode="json"))) == local
+    unknown_style = {**valid_plan(local), "style": "marketing"}
+    assert enhance_report(local, FakeEnhancer(unknown_style)) == local
+    invalid_id = {**valid_plan(local), "emphasized_finding_ids": ["finding-9999"]}
+    assert enhance_report(local, FakeEnhancer(invalid_id)) == local
 
 
-def test_enhancer_rejects_scene_name_data_quality_metrics_and_causal_fact_changes():
+def test_plan_with_unknown_field_or_free_text_fails_closed():
     local = local_report()
-    payload = local.model_dump(mode="json")
-    payload["scene_name"] = "雨夜行人横穿"
-    payload["data_quality"] = [{
-        "code": "fabricated", "severity": "info", "affected_modules": ["perception"],
-        "message": "fabricated",
-    }]
-    payload["perception_analysis"]["metrics"]["object_peak"] = 999
-    payload["causal_chains"][0]["confidence"] = 0.01
+    payload = {**valid_plan(local), "summary": "自由文本"}
     assert enhance_report(local, FakeEnhancer(payload)) == local
 
 
-def test_enhancer_rejects_dangling_evidence_reference_outside_fingerprint():
+def test_plan_rejects_duplicate_emphasis_ids():
     local = local_report()
-    payload = local.model_dump(mode="json")
-    payload["recommendations"][0]["evidence_ids"] = ["ev-9999"]
+    finding_id = local.key_findings[0].id
+    payload = {
+        **valid_plan(local),
+        "emphasized_finding_ids": [finding_id, finding_id],
+    }
     assert enhance_report(local, FakeEnhancer(payload)) == local
 
 
-def test_enhancer_rejects_provenance_and_all_evidence_id_mutations():
+def test_concise_plan_uses_only_the_local_safe_template():
     local = local_report()
-    payload = local.model_dump(mode="json")
-    payload["evidence_index"][0]["provenance"] = "estimated"
-    payload["timeline"][0]["evidence_ids"] = ["ev-9999"]
-    payload["key_findings"][0]["evidence_ids"] = ["ev-9999"]
-    payload["perception_analysis"]["evidence_ids"] = ["ev-9999"]
-    assert enhance_report(local, FakeEnhancer(payload)) == local
+    payload = {**valid_plan(local), "style": "concise"}
+    result = enhance_report(local, FakeEnhancer(payload))
+    assert result.generation_mode == "model-enhanced"
+    assert result.executive_summary == f"简明视图：{local.executive_summary}"
 
 
-def test_enhancer_fails_closed_when_one_response_tampers_with_all_fact_classes():
+def test_reviewer_composite_fact_injection_payload_is_rejected_without_leakage():
+    local = local_report()
+    attack = "default 100 分 999km/h 999米 低风险 已认证 ev-9999"
+    payload = {
+        **valid_plan(local),
+        "narrative": attack,
+        "emphasized_finding_ids": ["finding-9999"],
+        "emphasized_recommendation_ids": ["recommendation-9999"],
+    }
+    result = enhance_report(local, FakeEnhancer(payload))
+    assert result == local
+    serialized = result.model_dump_json()
+    for injected in ["default", "100", "999km/h", "999米", "低风险", "已认证", "ev-9999"]:
+        assert injected not in serialized
+
+
+def test_full_report_payload_is_not_an_enhancement_plan():
     local = local_report()
     payload = local.model_dump(mode="json")
-    payload["scene_name"] = "雨夜行人横穿"
-    payload["data_quality"] = [{
-        "code": "forged", "severity": "warning", "affected_modules": ["telemetry"],
-        "message": "forged",
-    }]
-    payload["scores"]["overall"] = 0
-    payload["timeline"][0]["risk"] = "medium"
-    payload["timeline"][0]["evidence_ids"] = ["ev-9999"]
-    payload["perception_analysis"]["metrics"]["object_peak"] = 999
-    payload["motion_control_analysis"]["metrics"]["peak_speed_kmh"] = 0
-    payload["trajectory_analysis"]["metrics"]["demo_path_lateral_deviation"] = 0
-    payload["causal_chains"][0]["confidence"] = 0
-    payload["causal_chains"][0]["evidence_ids"] = ["ev-9999"]
-    payload["key_findings"][0]["evidence_ids"] = ["ev-9999"]
-    payload["recommendations"][0]["evidence_ids"] = ["ev-9999"]
-    payload["evidence_index"][0]["provenance"] = "estimated"
-    payload["limitations"] = ["forged"]
+    payload["executive_summary"] = "经模型改写的摘要。"
     assert enhance_report(local, FakeEnhancer(payload)) == local

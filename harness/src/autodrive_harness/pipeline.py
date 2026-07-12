@@ -8,7 +8,7 @@ from .enhancement import ReportEnhancer, enhance_report
 from .events import mine_risk_episodes
 from .features import extract_features
 from .models import DiagnosisContext, DiagnosisProgress, DiagnosisReport
-from .reporting import assemble_report
+from .reporting import assemble_report, prepare_report_context
 from .scoring import score_scene
 from .timeline import align_timeline
 from .validation import validate_bundle
@@ -46,9 +46,14 @@ def run_scene_diagnosis(
         data_version=data_version,
     )
     emit(DiagnosisProgress(stage="causality", percent=72))
-    causal_chains = build_causal_chains(context)
+    context, evidence_index = prepare_report_context(context)
+    causal_chains = build_causal_chains(context, evidence_index)
     emit(DiagnosisProgress(stage="report", percent=86))
-    report = assemble_report(context, causal_chains=causal_chains)
+    report = assemble_report(
+        context,
+        causal_chains=causal_chains,
+        evidence_index=evidence_index,
+    )
     if enhancer is not None:
         emit(DiagnosisProgress(stage="enhancement", percent=94))
         report = enhance_report(report, enhancer)

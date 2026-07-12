@@ -3,14 +3,104 @@
   "defaultSceneId": "default",
   "scenes": [
     {
+      "id": "scene-0061",
+      "label": "nuScenes scene-0061",
+      "description": "Parked truck, construction, intersection, turn left, following a van",
+      "videoFile": "/scenes/scene-0061/sample.mp4",
+      "telemetryFile": "/scenes/scene-0061/telemetry.json",
+      "perceptionFile": "/scenes/scene-0061/perception.json",
+      "metadataFile": "/scenes/scene-0061/dataset-meta.json",
+      "lidarIndexFile": "/scenes/scene-0061/lidar/index.json"
+    },
+    {
+      "id": "scene-0103",
+      "label": "nuScenes scene-0103",
+      "description": "Many peds right, wait for turning car, long bike rack left, cyclist",
+      "videoFile": "/scenes/scene-0103/sample.mp4",
+      "telemetryFile": "/scenes/scene-0103/telemetry.json",
+      "perceptionFile": "/scenes/scene-0103/perception.json",
+      "metadataFile": "/scenes/scene-0103/dataset-meta.json",
+      "lidarIndexFile": "/scenes/scene-0103/lidar/index.json"
+    },
+    {
+      "id": "scene-0553",
+      "label": "nuScenes scene-0553",
+      "description": "Wait at intersection, bicycle, large truck, peds crossing crosswalk, ped with stroller",
+      "videoFile": "/scenes/scene-0553/sample.mp4",
+      "telemetryFile": "/scenes/scene-0553/telemetry.json",
+      "perceptionFile": "/scenes/scene-0553/perception.json",
+      "metadataFile": "/scenes/scene-0553/dataset-meta.json",
+      "lidarIndexFile": "/scenes/scene-0553/lidar/index.json"
+    },
+    {
+      "id": "scene-0655",
+      "label": "nuScenes scene-0655",
+      "description": "Parking lot, parked cars, jaywalker, bendy bus, gardening vehicles",
+      "videoFile": "/scenes/scene-0655/sample.mp4",
+      "telemetryFile": "/scenes/scene-0655/telemetry.json",
+      "perceptionFile": "/scenes/scene-0655/perception.json",
+      "metadataFile": "/scenes/scene-0655/dataset-meta.json",
+      "lidarIndexFile": "/scenes/scene-0655/lidar/index.json"
+    },
+    {
+      "id": "scene-0757",
+      "label": "nuScenes scene-0757",
+      "description": "Arrive at busy intersection, bus, wait at intersection, bicycle, peds",
+      "videoFile": "/scenes/scene-0757/sample.mp4",
+      "telemetryFile": "/scenes/scene-0757/telemetry.json",
+      "perceptionFile": "/scenes/scene-0757/perception.json",
+      "metadataFile": "/scenes/scene-0757/dataset-meta.json",
+      "lidarIndexFile": "/scenes/scene-0757/lidar/index.json"
+    },
+    {
       "id": "default",
-      "label": "默认实景",
-      "description": "现有 nuScenes mini CAM_FRONT 演示场景。",
+      "label": "nuScenes scene-0796（默认）",
+      "description": "Scooter, peds on sidewalk, bus, cars, truck, fake construction worker, bicycle, cross intersection, car overtaking us",
       "videoFile": "/sample.mp4",
       "telemetryFile": "/telemetry.json",
       "perceptionFile": "/perception.json",
       "metadataFile": "/dataset-meta.json",
       "lidarIndexFile": "/scenes/default/lidar/index.json"
+    },
+    {
+      "id": "scene-0916",
+      "label": "nuScenes scene-0916",
+      "description": "Parking lot, bicycle rack, parked bicycles, bus, many peds, parked scooters, parked motorcycle",
+      "videoFile": "/scenes/scene-0916/sample.mp4",
+      "telemetryFile": "/scenes/scene-0916/telemetry.json",
+      "perceptionFile": "/scenes/scene-0916/perception.json",
+      "metadataFile": "/scenes/scene-0916/dataset-meta.json",
+      "lidarIndexFile": "/scenes/scene-0916/lidar/index.json"
+    },
+    {
+      "id": "scene-1077",
+      "label": "nuScenes scene-1077",
+      "description": "Night, big street, bus stop, high speed, construction vehicle",
+      "videoFile": "/scenes/scene-1077/sample.mp4",
+      "telemetryFile": "/scenes/scene-1077/telemetry.json",
+      "perceptionFile": "/scenes/scene-1077/perception.json",
+      "metadataFile": "/scenes/scene-1077/dataset-meta.json",
+      "lidarIndexFile": "/scenes/scene-1077/lidar/index.json"
+    },
+    {
+      "id": "scene-1094",
+      "label": "nuScenes scene-1094",
+      "description": "Night, after rain, many peds, PMD, ped with bag, jaywalker, truck, scooter",
+      "videoFile": "/scenes/scene-1094/sample.mp4",
+      "telemetryFile": "/scenes/scene-1094/telemetry.json",
+      "perceptionFile": "/scenes/scene-1094/perception.json",
+      "metadataFile": "/scenes/scene-1094/dataset-meta.json",
+      "lidarIndexFile": "/scenes/scene-1094/lidar/index.json"
+    },
+    {
+      "id": "scene-1100",
+      "label": "nuScenes scene-1100",
+      "description": "Night, peds in sidewalk, peds cross crosswalk, scooter, PMD, difficult lighting",
+      "videoFile": "/scenes/scene-1100/sample.mp4",
+      "telemetryFile": "/scenes/scene-1100/telemetry.json",
+      "perceptionFile": "/scenes/scene-1100/perception.json",
+      "metadataFile": "/scenes/scene-1100/dataset-meta.json",
+      "lidarIndexFile": "/scenes/scene-1100/lidar/index.json"
     }
   ]
 }

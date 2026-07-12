@@ -1,3 +1,8 @@
 .positioning-copy-single { max-width:900px; }
 .positioning-section .positioning-archive-deck { margin-top:clamp(28px,4vh,46px); }
 .showcase-scroll-content > .intro-section.positioning-section::before { background:rgba(243,244,232,.62); }
+
+@media (min-width:901px) {
+  .positioning-copy-single { max-width:min(760px,62%); }
+  .positioning-section .positioning-archive-deck { margin-top:clamp(38px,5vh,72px); }
+}

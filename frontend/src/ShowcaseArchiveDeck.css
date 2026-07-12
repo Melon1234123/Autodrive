@@ -102,3 +102,32 @@
 @media (prefers-reduced-motion:reduce) {
   .archive-card,.archive-card:hover,.archive-card-cluster,.archive-number-mask { transition:none; }
 }
+
+@media (min-width:901px) {
+  .archive-deck {
+    width:100%;
+    max-width:none;
+    height:clamp(420px,54vh,560px);
+    margin-top:clamp(32px,4vh,58px);
+    gap:var(--showcase-grid-gap,clamp(18px,1.2vw,32px));
+  }
+
+  .archive-card {
+    height:clamp(260px,30vw,420px);
+  }
+
+  .archive-card.is-active {
+    height:clamp(315px,35vw,500px);
+  }
+
+  .archive-card-cluster {
+    top:clamp(24px,2.2vw,42px);
+    right:clamp(20px,1.8vw,36px);
+    left:clamp(20px,1.8vw,36px);
+  }
+
+  .archive-card-title { font-size:clamp(15px,1.05vw,22px); }
+  .archive-card.is-active .archive-card-title { font-size:clamp(20px,1.35vw,30px); }
+  .archive-card-description { font-size:clamp(8px,.62vw,12px); }
+  .archive-card.is-active .archive-card-description { font-size:clamp(9px,.7vw,14px); }
+}

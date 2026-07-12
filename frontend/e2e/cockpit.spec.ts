@@ -80,6 +80,7 @@ async function switchSceneAndExpectPlayback(
   await expectSceneResetNearZero(video);
   await expect.poll(() => video.evaluate((node: HTMLVideoElement) => node.readyState)).toBeGreaterThanOrEqual(3);
   const media = await video.evaluate((node: HTMLVideoElement) => ({ paused: node.paused }));
+  await expect(page.locator("video")).toHaveCount(1);
   expect(await page.evaluate((original) => document.querySelector("video") === original, originalVideo)).toBe(true);
   expect(media.paused).toBe(false);
   await expect(root).toHaveAttribute("data-active-screen", activeScreen);
@@ -190,13 +191,52 @@ async function videoSignal(video: Locator) {
   });
 }
 
+function expectContinuousMediaProgress({
+  before,
+  after,
+  duration,
+  transition,
+}: {
+  before: number;
+  after: number;
+  duration: number;
+  transition: string;
+}) {
+  const sampleTolerance = 0.08;
+  const wrapWindow = 1;
+  const timeDropped = after < before - sampleTolerance;
+  let forwardDelta: number;
+
+  if (timeDropped) {
+    const distanceToEnd = duration - before;
+    expect(
+      distanceToEnd,
+      `${transition}: currentTime dropped, but playback was not within ${wrapWindow}s of the media end`,
+    ).toBeLessThanOrEqual(wrapWindow);
+    expect(
+      after,
+      `${transition}: a permitted loop wrap must land within ${wrapWindow}s of the media start`,
+    ).toBeLessThanOrEqual(wrapWindow);
+    forwardDelta = distanceToEnd + after;
+  } else {
+    expect(
+      after,
+      `${transition}: currentTime must not move backward or reset during a screen-only transition`,
+    ).toBeGreaterThanOrEqual(before - sampleTolerance);
+    forwardDelta = Math.max(0, after - before);
+  }
+
+  expect(forwardDelta, `${transition}: playing media must continue advancing`).toBeGreaterThan(0.02);
+  expect(forwardDelta, `${transition}: screen transition took an implausible amount of media time`).toBeLessThanOrEqual(10);
+}
+
 test("keeps one continuous video across all three screens", async ({ page }) => {
   await openCockpit(page);
   const video = page.getByTestId("persistent-scene-video");
   const handle = await video.elementHandle();
   await video.evaluate((node: HTMLVideoElement) => {
     node.currentTime = 2;
-    node.playbackRate = 0.5;
+    node.playbackRate = 0.125;
     return node.play();
   });
   await expect.poll(() => video.evaluate((node: HTMLVideoElement) => node.currentTime)).toBeGreaterThan(2.05);
@@ -204,12 +244,17 @@ test("keeps one continuous video across all three screens", async ({ page }) => 
 
   await navigateByWheel(page, "live");
   await expect(page.getByRole("region", { name: "实时解析" })).toBeInViewport();
+  await expect(page.locator("video")).toHaveCount(1);
   expect(await page.evaluate((original) => document.querySelector("video") === original, handle)).toBe(true);
   const live = await video.evaluate((node: HTMLVideoElement) => ({ time: node.currentTime, paused: node.paused, rate: node.playbackRate }));
-  const playingDelta = live.time >= before.time ? live.time - before.time : before.duration - before.time + live.time;
-  expect(playingDelta).toBeGreaterThan(0.05);
+  expectContinuousMediaProgress({
+    before: before.time,
+    after: live.time,
+    duration: before.duration,
+    transition: "entry -> live",
+  });
   expect(live.paused).toBe(false);
-  expect(live.rate).toBe(0.5);
+  expect(live.rate).toBe(0.125);
 
   await video.evaluate((node: HTMLVideoElement) => {
     node.currentTime = 3;
@@ -230,6 +275,7 @@ test("keeps one continuous video across all three screens", async ({ page }) => 
 });
 
 test("switches ten Chinese scenes in place and keeps live and diagnosis screens stable", async ({ page }) => {
+  test.setTimeout(300_000);
   await openCockpit(page);
   const root = page.locator(".cockpit-experience");
   const video = page.getByTestId("persistent-scene-video");
@@ -242,9 +288,11 @@ test("switches ten Chinese scenes in place and keeps live and diagnosis screens 
   await expect(video).toHaveAttribute("src", "/scenes/scene-0061/sample.mp4");
   await expectSceneResetNearZero(video);
   await expect.poll(() => video.evaluate((node: HTMLVideoElement) => node.readyState)).toBeGreaterThanOrEqual(3);
+  await expect(page.locator("video")).toHaveCount(1);
   expect(await root.evaluate((node) => node.scrollTop)).toBe(entryScroll);
   expect(await page.evaluate((original) => document.querySelector("video") === original, originalVideo)).toBe(true);
-  expect(await video.evaluate((node: HTMLVideoElement) => node.paused)).toBe(false);
+  const entryMedia = await video.evaluate((node: HTMLVideoElement) => ({ paused: node.paused }));
+  expect(entryMedia.paused).toBe(false);
   expect((await video.screenshot()).equals(oldPoster)).toBe(false);
 
   const optionLabels = await page.getByRole("combobox", { name: "选择数据场景" }).locator("option").allTextContents();

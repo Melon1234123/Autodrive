@@ -14,7 +14,8 @@ import TechnicalRouteSection from "./TechnicalRouteSection";
 import { LidarBev, type LidarHistoryCloud } from "./LidarBev";
 import TerrainBackdrop from "./TerrainBackdrop";
 import { CockpitExperience } from "./cockpit/CockpitExperience";
-import type { CockpitScreen } from "./cockpit/types";
+import { createDiagnosisJob, pollDiagnosisJob } from "./cockpit/diagnosis-client";
+import type { CockpitScreen, DiagnosisReport, DiagnosisStage } from "./cockpit/types";
 import type { ShowcaseTerrainPreset } from "./terrain-presets";
 import { useShowcaseMotion } from "./useShowcaseMotion";
 import { useTerrainSectionPalette } from "./useTerrainSectionPalette";
@@ -190,6 +191,19 @@ const modeText: Record<DiagnosisMode, string> = {
   unknown: "未知",
 };
 
+const diagnosisStageText: Record<DiagnosisStage, string> = {
+  queued: "等待调度",
+  validation: "数据校验",
+  timeline: "时间线对齐",
+  features: "特征提取",
+  events: "风险事件",
+  causality: "因果分析",
+  report: "报告生成",
+  enhancement: "模型增强",
+  complete: "已完成",
+  failed: "失败",
+};
+
 function findNearestFrame<T extends { time: number }>(frames: T[], currentTime: number) {
   if (frames.length === 0) {
     return null;
@@ -227,6 +241,12 @@ export type DiagnosisRequestOwner = {
   socketGeneration: number;
 };
 
+export type DiagnosisJobOwner = {
+  sceneGeneration: number;
+  sceneKey: string;
+  jobId: string;
+};
+
 export function shouldAcceptDiagnosisResponse(
   pending: DiagnosisRequestOwner | null,
   activeSceneGeneration: number,
@@ -239,6 +259,24 @@ export function shouldAcceptDiagnosisResponse(
     && pending.requestGeneration === activeRequestGeneration
     && pending.socketGeneration === responseSocketGeneration,
   );
+}
+
+export function shouldAcceptDiagnosisJobUpdate(
+  owner: DiagnosisJobOwner | null,
+  activeSceneGeneration: number,
+  activeSceneKey: string,
+  jobId: string,
+): boolean {
+  return Boolean(
+    owner
+    && owner.sceneGeneration === activeSceneGeneration
+    && owner.sceneKey === activeSceneKey
+    && owner.jobId === jobId,
+  );
+}
+
+export function advanceDiagnosisProgress(current: number, next: number): number {
+  return Math.max(current, next);
 }
 
 export function resolveLidarDisplayState(
@@ -935,6 +973,8 @@ function App() {
   const diagnosisRequestGenerationRef = useRef(0);
   const socketGenerationRef = useRef(0);
   const pendingDiagnosisRef = useRef<DiagnosisRequestOwner | null>(null);
+  const diagnosisJobAbortRef = useRef<AbortController | null>(null);
+  const diagnosisJobOwnerRef = useRef<DiagnosisJobOwner | null>(null);
   const showcaseOpeningPlayedRef = useRef(false);
   const handleShowcaseOpeningComplete = useCallback(() => {
     showcaseOpeningPlayedRef.current = true;
@@ -945,6 +985,12 @@ function App() {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
   const [diagnosing, setDiagnosing] = useState(false);
   const [diagnosis, setDiagnosis] = useState<DiagnosisResult | null>(null);
+  const [diagnosisReport, setDiagnosisReport] = useState<DiagnosisReport | null>(null);
+  const [reportRunning, setReportRunning] = useState(false);
+  const [reportStage, setReportStage] = useState<DiagnosisStage>("queued");
+  const [reportProgress, setReportProgress] = useState(0);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [dataVersion, setDataVersion] = useState("manifest-v1");
   const [datasetMeta, setDatasetMeta] = useState<DatasetMeta | null>(null);
   const [scenes, setScenes] = useState<SceneManifestEntry[]>([LEGACY_SCENE]);
   const scenesRef = useRef(scenes);
@@ -1069,6 +1115,9 @@ function App() {
     selectedSceneIdRef.current = nextSceneId;
     sceneGenerationRef.current += 1;
     diagnosisRequestGenerationRef.current += 1;
+    diagnosisJobAbortRef.current?.abort();
+    diagnosisJobAbortRef.current = null;
+    diagnosisJobOwnerRef.current = null;
     const pendingDiagnosis = pendingDiagnosisRef.current;
     pendingDiagnosisRef.current = null;
     const diagnosisSocket = socketRef.current;
@@ -1094,6 +1143,11 @@ function App() {
     setSceneLoading(true);
     setDiagnosis(null);
     setDiagnosing(false);
+    setDiagnosisReport(null);
+    setReportRunning(false);
+    setReportStage("queued");
+    setReportProgress(0);
+    setReportError(null);
     setError(null);
     setCurrentTime(0);
     setOwnedLidarIndex(null);
@@ -1188,6 +1242,7 @@ function App() {
           return;
         }
         setScenes(manifest.scenes);
+        setDataVersion(`manifest-v${manifest.version}`);
         const nextScene = manifest.defaultSceneId
           ? manifest.scenes.find((scene) => scene.id === manifest.defaultSceneId) ?? manifest.scenes[0]
           : manifest.scenes[0];
@@ -1378,6 +1433,9 @@ function App() {
         reconnectTimerRef.current = null;
       }
       pendingDiagnosisRef.current = null;
+      diagnosisJobAbortRef.current?.abort();
+      diagnosisJobAbortRef.current = null;
+      diagnosisJobOwnerRef.current = null;
       const socket = socketRef.current;
       socketRef.current = null;
       if (socket) {
@@ -1441,6 +1499,73 @@ function App() {
       setDiagnosing(false);
       setError(`诊断请求发送失败：${sendError instanceof Error ? sendError.message : String(sendError)}`);
     }
+  };
+
+  const handleGenerateReport = () => {
+    diagnosisJobAbortRef.current?.abort();
+    const controller = new AbortController();
+    diagnosisJobAbortRef.current = controller;
+    diagnosisJobOwnerRef.current = null;
+    const sceneGeneration = sceneGenerationRef.current;
+    const sceneKey = selectedScene.id;
+    const ownsCreation = () => (
+      !controller.signal.aborted
+      && diagnosisJobAbortRef.current === controller
+      && sceneGenerationRef.current === sceneGeneration
+      && selectedSceneIdRef.current === sceneKey
+    );
+
+    setDiagnosisReport(null);
+    setReportRunning(true);
+    setReportStage("queued");
+    setReportProgress(0);
+    setReportError(null);
+
+    void createDiagnosisJob(API_URL, sceneKey, dataVersion, controller.signal)
+      .then(async (created) => {
+        if (!ownsCreation()) return null;
+        const owner = { sceneGeneration, sceneKey, jobId: created.jobId };
+        diagnosisJobOwnerRef.current = owner;
+        setReportStage(created.stage);
+        setReportProgress(created.percent);
+        if (created.stage === "failed") throw new Error(created.error ?? "诊断任务失败");
+        if (created.stage === "complete" && created.report) return created.report;
+
+        return pollDiagnosisJob(API_URL, created.jobId, controller.signal, (snapshot) => {
+          if (!shouldAcceptDiagnosisJobUpdate(
+            diagnosisJobOwnerRef.current,
+            sceneGenerationRef.current,
+            selectedSceneIdRef.current,
+            snapshot.jobId,
+          )) return;
+          setReportStage(snapshot.stage);
+          setReportProgress((current) => advanceDiagnosisProgress(current, snapshot.percent));
+        });
+      })
+      .then((completedReport) => {
+        const owner = diagnosisJobOwnerRef.current;
+        if (!completedReport || !owner || !shouldAcceptDiagnosisJobUpdate(
+          owner,
+          sceneGenerationRef.current,
+          selectedSceneIdRef.current,
+          owner.jobId,
+        )) return;
+        setDiagnosisReport(completedReport);
+        setReportStage("complete");
+        setReportProgress(100);
+      })
+      .catch((reportFailure: unknown) => {
+        if (reportFailure instanceof DOMException && reportFailure.name === "AbortError") return;
+        if (!ownsCreation()) return;
+        setReportStage("failed");
+        setReportError(reportFailure instanceof Error ? reportFailure.message : String(reportFailure));
+      })
+      .finally(() => {
+        if (!ownsCreation()) return;
+        setReportRunning(false);
+        diagnosisJobOwnerRef.current = null;
+        diagnosisJobAbortRef.current = null;
+      });
   };
 
   const handleSeekRiskEvent = (time: number, event?: RiskEvent) => {
@@ -1525,20 +1650,35 @@ function App() {
         <strong className={`status-dot status-${connectionStatus}`}>{statusText[connectionStatus]}</strong>
       </div>
       <div className="cockpit-diagnosis-progress" aria-label="诊断进度">
-        <span>诊断进度</span>
-        <strong>{diagnosing ? "处理中" : "等待启动"}</strong>
-        <i style={{ width: diagnosing ? "56%" : "0%" }} />
+        <span>全场景报告</span>
+        <strong>{reportRunning ? `${reportProgress}%` : diagnosisReport ? "已完成" : reportError ? "失败" : "等待启动"}</strong>
+        <i style={{ width: `${reportProgress}%` }} />
       </div>
-      <button
-        className="diagnose-button"
-        type="button"
-        onClick={handleDiagnose}
-        disabled={diagnosing || connectionStatus !== "connected" || !currentFrame}
-      >
-        {diagnosing ? <LoaderCircle className="spin" size={19} /> : <BrainCircuit size={19} />}
-        {diagnosing ? "诊断中" : "全域诊断"}
-      </button>
+      <div className="cockpit-diagnosis__buttons">
+        <button
+          className="diagnose-button diagnose-button--secondary"
+          type="button"
+          onClick={handleDiagnose}
+          disabled={diagnosing || connectionStatus !== "connected" || !currentFrame}
+          title="通过 WebSocket 诊断当前视频帧"
+          aria-label="全域诊断"
+        >
+          {diagnosing ? <LoaderCircle className="spin" size={17} /> : <BrainCircuit size={17} />}
+          {diagnosing ? "当前帧诊断中" : "当前帧诊断"}
+        </button>
+        <button
+          className="diagnose-button"
+          type="button"
+          onClick={handleGenerateReport}
+          disabled={reportRunning || sceneLoading}
+        >
+          {reportRunning ? <LoaderCircle className="spin" size={17} /> : <FileSearch size={17} />}
+          {reportRunning ? "报告生成中" : "生成全场景报告"}
+        </button>
+      </div>
       {error && <div className="message error-message"><AlertTriangle size={18} aria-hidden="true" /><span>{error}</span></div>}
+      {reportError && <div className="message error-message"><AlertTriangle size={18} aria-hidden="true" /><span>{reportError}</span></div>}
+      <span className="cockpit-diagnosis__stage" aria-live="polite">任务阶段：{diagnosisStageText[reportStage]}</span>
       <div className="result-panel">
         <div className="result-title"><BrainCircuit size={18} aria-hidden="true" /><span>诊断分析</span></div>
         <p>{diagnosis?.thought ?? "点击全域诊断后，这里会展示后端返回的风险分析。"}</p>
@@ -1583,9 +1723,11 @@ function App() {
       mapSlot={mapSlot}
       historySlot={historySlot}
       diagnosisSlot={diagnosisSlot}
-      reportExpanded={false}
+      report={diagnosisReport}
+      reportExpanded={diagnosisReport !== null}
       videoRef={videoRef}
       onSceneSelect={handleSceneSelection}
+      onSeekReportEvidence={handleSeekRiskEvent}
       onScreenChange={setCockpitScreen}
       onReturnSite={() => {
         setTerrainPreset("hidden");

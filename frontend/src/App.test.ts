@@ -50,6 +50,7 @@ vi.mock("./LidarBev", async () => {
 });
 
 import App, {
+  advanceDiagnosisProgress,
   clearMapCanvasBitmap,
   DEFAULT_MAP_VIEWPORT,
   loadOptionalLidarIndex,
@@ -60,7 +61,9 @@ import App, {
   resolveLidarSource,
   resolveReplayTime,
   shouldAcceptDiagnosisResponse,
+  shouldAcceptDiagnosisJobUpdate,
 } from "./App";
+import type { DiagnosisReport } from "./cockpit/types";
 import { selectMapGeometry } from "./map-geometry";
 
 const resizeObserverInstances: ResizeObserverMock[] = [];
@@ -276,6 +279,21 @@ describe("cockpit replay integration", () => {
     expect(shouldAcceptDiagnosisResponse(pending, 4, 7, 3)).toBe(false);
     expect(shouldAcceptDiagnosisResponse(null, 4, 7, 2)).toBe(false);
   });
+
+  it("accepts report progress only for the active scene generation, scene key, and job", () => {
+    const owner = { sceneGeneration: 4, sceneKey: "scene-a", jobId: "job-1" };
+
+    expect(shouldAcceptDiagnosisJobUpdate(owner, 4, "scene-a", "job-1")).toBe(true);
+    expect(shouldAcceptDiagnosisJobUpdate(owner, 5, "scene-a", "job-1")).toBe(false);
+    expect(shouldAcceptDiagnosisJobUpdate(owner, 4, "scene-b", "job-1")).toBe(false);
+    expect(shouldAcceptDiagnosisJobUpdate(owner, 4, "scene-a", "job-2")).toBe(false);
+    expect(shouldAcceptDiagnosisJobUpdate(null, 4, "scene-a", "job-1")).toBe(false);
+  });
+
+  it("keeps report progress monotonic across create and poll snapshots", () => {
+    expect(advanceDiagnosisProgress(50, 18)).toBe(50);
+    expect(advanceDiagnosisProgress(50, 86)).toBe(86);
+  });
 });
 
 it("attaches the map resize observer when the cockpit canvas mounts", () => {
@@ -404,6 +422,26 @@ it("clears old scene coordinates until the selected scene perception resolves", 
 });
 
 describe("scene-owned cockpit async state", () => {
+  const completedReport = {
+    schema_version: "1.0",
+    scene_name: "旧场景报告",
+    data_version: "manifest-v1",
+    generation_mode: "local-harness",
+    executive_summary: "STALE REPORT CONTENT",
+    scene_overview: {},
+    data_quality: [],
+    scores: { perception: 10, motion: 20, control: 30, trajectory: 40, data_quality: 90, overall: 30, confidence: 0.9 },
+    key_findings: [],
+    timeline: [],
+    perception_analysis: { summary: "感知稳定。", metrics: {}, evidence_ids: [] },
+    motion_control_analysis: { summary: "控制稳定。", metrics: {}, evidence_ids: [] },
+    trajectory_analysis: { summary: "轨迹稳定。", metrics: {}, evidence_ids: [] },
+    causal_chains: [],
+    recommendations: [],
+    regression_tests: [],
+    evidence_index: [],
+    limitations: [],
+  } satisfies DiagnosisReport;
   const telemetry = [{
     time: 0,
     speedKmh: 18,
@@ -583,6 +621,66 @@ describe("scene-owned cockpit async state", () => {
     expect(screen.queryByText("STALE THOUGHT")).not.toBeInTheDocument();
     expect(screen.queryByText("STALE CONCLUSION")).not.toBeInTheDocument();
     expect(screen.getByText("等待当前帧诊断结果。")).toBeInTheDocument();
+  });
+
+  it("aborts visible report polling and rejects a completed old-scene report", async () => {
+    let resolveOldReport!: (response: Response) => void;
+    const pendingOldReport = new Promise<Response>((resolve) => {
+      resolveOldReport = resolve;
+    });
+    let pollSignal: AbortSignal | undefined;
+    const baseFetch = createSceneFetch({ withLidar: false });
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/diagnoses") && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({
+          jobId: "job-old",
+          sceneKey: "scene-a",
+          dataVersion: "manifest-v1",
+          stage: "validation",
+          percent: 10,
+          report: null,
+          error: null,
+        }));
+      }
+      if (url.endsWith("/api/v1/diagnoses/job-old")) {
+        pollSignal = init?.signal ?? undefined;
+        return pendingOldReport;
+      }
+      return baseFetch(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(createElement(App));
+    fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+    activateCockpitScreen("全域诊断");
+    const sceneSelector = await screen.findByRole("combobox", { name: "选择数据场景" });
+    await waitFor(() => expect(sceneSelector).toHaveValue("scene-a"));
+
+    const reportButton = screen.getByRole("button", { name: "生成全场景报告" });
+    await waitFor(() => expect(reportButton).toBeEnabled());
+    fireEvent.click(reportButton);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/api\/v1\/diagnoses\/job-old$/),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ));
+
+    fireEvent.change(sceneSelector, { target: { value: "scene-b" } });
+    expect(pollSignal?.aborted).toBe(true);
+    await act(async () => {
+      resolveOldReport(jsonResponse({
+        jobId: "job-old",
+        sceneKey: "scene-a",
+        dataVersion: "manifest-v1",
+        stage: "complete",
+        percent: 100,
+        report: completedReport,
+        error: null,
+      }));
+      await pendingOldReport;
+    });
+
+    expect(screen.queryByText("STALE REPORT CONTENT")).not.toBeInTheDocument();
   });
 });
 

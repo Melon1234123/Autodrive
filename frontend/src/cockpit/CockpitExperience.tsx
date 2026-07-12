@@ -1,11 +1,12 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import { CockpitNav } from "./CockpitNav";
+import { DiagnosisReportView } from "./DiagnosisReport";
 import { GlobalDiagnosisScreen } from "./GlobalDiagnosisScreen";
 import { LiveAnalysisScreen, type CockpitMonitoring } from "./LiveAnalysisScreen";
 import { PersistentScenePlayer, type CameraPerceptionObject } from "./PersistentScenePlayer";
 import { SceneEntryScreen } from "./SceneEntryScreen";
-import type { CockpitScreen, SceneManifestEntry } from "./types";
+import type { CockpitScreen, DiagnosisReport, SceneManifestEntry } from "./types";
 import { useCockpitScroll } from "./useCockpitScroll";
 import "./cockpit.css";
 
@@ -20,9 +21,11 @@ export type CockpitExperienceProps = {
   mapSlot: ReactNode;
   historySlot: ReactNode;
   diagnosisSlot: ReactNode;
+  report: DiagnosisReport | null;
   reportExpanded: boolean;
   videoRef?: RefObject<HTMLVideoElement | null>;
   onSceneSelect: (sceneKey: string) => void;
+  onSeekReportEvidence: (time: number) => void;
   onReturnSite: () => void;
   onContact: () => void;
   onScreenChange?: (screen: CockpitScreen) => void;
@@ -39,15 +42,19 @@ export function CockpitExperience({
   mapSlot,
   historySlot,
   diagnosisSlot,
+  report,
   reportExpanded,
   videoRef,
   onSceneSelect,
+  onSeekReportEvidence,
   onReturnSite,
   onContact,
   onScreenChange,
 }: CockpitExperienceProps) {
   const rootRef = useRef<HTMLElement | null>(null);
+  const evidenceRef = useRef<HTMLDivElement | null>(null);
   const reportRef = useRef<HTMLDivElement | null>(null);
+  const lastScrolledReportRef = useRef<DiagnosisReport | null>(null);
   const entryVideoSlotRef = useRef<HTMLDivElement | null>(null);
   const liveVideoSlotRef = useRef<HTMLDivElement | null>(null);
   const diagnosisVideoSlotRef = useRef<HTMLDivElement | null>(null);
@@ -57,7 +64,22 @@ export function CockpitExperience({
     onScreenChange?.(screen);
   }, [onScreenChange]);
 
-  useCockpitScroll({ rootRef, reportRef, reportExpanded, onScreenChange: handleScreenChange });
+  useCockpitScroll({ rootRef, reportRef: evidenceRef, reportExpanded, onScreenChange: handleScreenChange });
+
+  useEffect(() => {
+    if (!report) {
+      lastScrolledReportRef.current = null;
+      return;
+    }
+    if (lastScrolledReportRef.current === report) return;
+    lastScrolledReportRef.current = report;
+    reportRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [report]);
+
+  const handleSeekReportEvidence = useCallback((time: number) => {
+    onSeekReportEvidence(time);
+    evidenceRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [onSeekReportEvidence]);
 
   const slots: Record<CockpitScreen, RefObject<HTMLElement | null>> = {
     entry: entryVideoSlotRef,
@@ -94,10 +116,12 @@ export function CockpitExperience({
         sceneLoading={sceneLoading}
         active={activeScreen === "diagnosis"}
         videoSlotRef={diagnosisVideoSlotRef}
+        evidenceRef={evidenceRef}
         reportRef={reportRef}
         lidarSlot={lidarSlot}
         mapSlot={mapSlot}
         diagnosisSlot={diagnosisSlot}
+        reportSlot={report ? <DiagnosisReportView report={report} onSeekEvidence={handleSeekReportEvidence} /> : null}
         onSceneSelect={onSceneSelect}
       />
       <PersistentScenePlayer

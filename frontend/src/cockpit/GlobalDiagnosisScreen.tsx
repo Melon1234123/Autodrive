@@ -9,10 +9,12 @@ type GlobalDiagnosisScreenProps = {
   sceneLoading: boolean;
   active: boolean;
   videoSlotRef: RefObject<HTMLDivElement | null>;
+  evidenceRef: RefObject<HTMLDivElement | null>;
   reportRef: RefObject<HTMLDivElement | null>;
   lidarSlot: ReactNode;
   mapSlot: ReactNode;
   diagnosisSlot: ReactNode;
+  reportSlot: ReactNode;
   onSceneSelect: (sceneKey: string) => void;
 };
 
@@ -22,15 +24,17 @@ export function GlobalDiagnosisScreen({
   sceneLoading,
   active,
   videoSlotRef,
+  evidenceRef,
   reportRef,
   lidarSlot,
   mapSlot,
   diagnosisSlot,
+  reportSlot,
   onSceneSelect,
 }: GlobalDiagnosisScreenProps) {
   return (
     <section className="cockpit-screen cockpit-diagnosis" data-cockpit-screen="diagnosis" aria-label="全域诊断">
-      <div className="cockpit-screen__heading cockpit-screen__heading--compact" ref={reportRef}>
+      <div className="cockpit-screen__heading cockpit-screen__heading--compact" ref={evidenceRef}>
         <div><p className="cockpit-screen__index">03 / 全域诊断</p><h2>从关键帧，<em>追溯完整因果链</em></h2></div>
         {active ? (
           <label className="cockpit-scene-select cockpit-scene-select--heading">
@@ -56,6 +60,9 @@ export function GlobalDiagnosisScreen({
           </div>
           <div className="cockpit-diagnosis__action cockpit-glass-panel">{active ? diagnosisSlot : null}</div>
         </div>
+      </div>
+      <div ref={reportRef} className="cockpit-diagnosis__report-anchor">
+        {reportSlot}
       </div>
     </section>
   );

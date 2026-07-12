@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { CockpitExperience, type CockpitExperienceProps } from "./CockpitExperience";
+import type { DiagnosisReport } from "./types";
 
 class ResizeObserverMock {
   observe = vi.fn();
@@ -29,6 +30,34 @@ const scenes = [
 ];
 
 const onSceneSelect = vi.fn();
+
+const completedReport = {
+  schema_version: "1.0",
+  scene_name: "城市路口侧向超车",
+  data_version: "test-v1",
+  generation_mode: "local-harness",
+  executive_summary: "全场景分析完成。",
+  scene_overview: {},
+  data_quality: [],
+  scores: { perception: 10, motion: 20, control: 30, trajectory: 40, data_quality: 90, overall: 30, confidence: 0.9 },
+  key_findings: [],
+  timeline: [],
+  perception_analysis: { summary: "感知稳定。", metrics: {}, evidence_ids: [] },
+  motion_control_analysis: { summary: "控制稳定。", metrics: {}, evidence_ids: [] },
+  trajectory_analysis: { summary: "轨迹稳定。", metrics: {}, evidence_ids: [] },
+  causal_chains: [],
+  recommendations: [],
+  regression_tests: [],
+  evidence_index: [{
+    id: "ev-0001",
+    source: "telemetry",
+    provenance: "real-derived",
+    start_time: 12.48,
+    end_time: 12.8,
+    detail: "控制响应证据。",
+  }],
+  limitations: [],
+} satisfies DiagnosisReport;
 
 function cockpitProps(overrides: Partial<CockpitExperienceProps> = {}): CockpitExperienceProps {
   return {
@@ -56,7 +85,9 @@ function cockpitProps(overrides: Partial<CockpitExperienceProps> = {}): CockpitE
     mapSlot: createElement("div", { "data-testid": "map-slot" }),
     historySlot: createElement("div", { "data-testid": "history-slot" }),
     diagnosisSlot: createElement("div", { "data-testid": "diagnosis-slot" }),
+    report: null,
     reportExpanded: false,
+    onSeekReportEvidence: vi.fn(),
     onSceneSelect,
     onReturnSite: vi.fn(),
     onContact: vi.fn(),
@@ -155,4 +186,31 @@ it.each([
   expect(root.scrollTop).toBe(scrollTop);
   expect(scroll).not.toHaveBeenCalled();
   expect(screen.getByRole("region", { name: screenName })).toBeInTheDocument();
+});
+
+it("scrolls to each completed report once and returns to evidence after a time seek", () => {
+  const onSeekReportEvidence = vi.fn();
+  const { container, rerender } = render(createElement(CockpitExperience, cockpitProps({ onSeekReportEvidence })));
+  const reportAnchor = container.querySelector<HTMLElement>(".cockpit-diagnosis__report-anchor")!;
+  const evidenceAnchor = container.querySelector<HTMLElement>(".cockpit-diagnosis .cockpit-screen__heading")!;
+  const reportScroll = vi.spyOn(reportAnchor, "scrollIntoView");
+  const evidenceScroll = vi.spyOn(evidenceAnchor, "scrollIntoView");
+
+  rerender(createElement(CockpitExperience, cockpitProps({
+    report: completedReport,
+    reportExpanded: true,
+    onSeekReportEvidence,
+  })));
+  expect(reportScroll).toHaveBeenCalledTimes(1);
+
+  rerender(createElement(CockpitExperience, cockpitProps({
+    report: completedReport,
+    reportExpanded: true,
+    onSeekReportEvidence,
+  })));
+  expect(reportScroll).toHaveBeenCalledTimes(1);
+
+  fireEvent.click(screen.getByRole("button", { name: "12.48 秒" }));
+  expect(onSeekReportEvidence).toHaveBeenCalledWith(12.48);
+  expect(evidenceScroll).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
 });

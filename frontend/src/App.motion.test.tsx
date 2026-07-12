@@ -41,7 +41,7 @@ it("does not replay an interrupted opening after returning from the cockpit in t
   const first = render(<App />);
   expect(motionCalls.at(-1)?.playOpening).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "进入效果展示" }));
-  fireEvent.click(screen.getByRole("button", { name: "项目官网" }));
+  fireEvent.click(screen.getByRole("button", { name: "返回官网" }));
   expect(motionCalls.at(-1)?.playOpening).toBe(false);
   first.unmount();
   render(<App />);

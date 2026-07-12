@@ -13,6 +13,8 @@ import ShowcaseOpening from "./ShowcaseOpening";
 import TechnicalRouteSection from "./TechnicalRouteSection";
 import { LidarBev, type LidarHistoryCloud } from "./LidarBev";
 import TerrainBackdrop from "./TerrainBackdrop";
+import { CockpitExperience } from "./cockpit/CockpitExperience";
+import type { CockpitScreen } from "./cockpit/types";
 import type { ShowcaseTerrainPreset } from "./terrain-presets";
 import { useShowcaseMotion } from "./useShowcaseMotion";
 import { useTerrainSectionPalette } from "./useTerrainSectionPalette";
@@ -32,16 +34,13 @@ import {
 } from "./bev-orientation";
 import { routeTangentAndNormal, selectMapGeometry, type EgoPoint } from "./map-geometry";
 import {
-  Activity,
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
   BrainCircuit,
-  Camera,
   CircleCheck,
   Database,
   FileSearch,
-  Gauge,
   Layers3,
   LoaderCircle,
   Map,
@@ -49,12 +48,9 @@ import {
   Minus,
   Move,
   Plus,
-  Radio,
-  ChevronDown,
   ShieldCheck,
   Sparkles,
   History,
-  Zap,
 } from "lucide-react";
 
 type RiskLevel = "low" | "medium" | "high" | "unknown";
@@ -576,6 +572,7 @@ function useMapCanvas(
   canvasRef: React.RefObject<HTMLCanvasElement | null>,
   viewport: MapViewport,
   active: boolean,
+  renderOwner: CockpitScreen,
 ) {
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
 
@@ -609,7 +606,7 @@ function useMapCanvas(
     resizeObserver.observe(parent);
 
     return () => resizeObserver.disconnect();
-  }, [active, canvasRef]);
+  }, [active, canvasRef, renderOwner]);
 
   useEffect(() => {
     if (!active || canvasSize.width <= 0 || canvasSize.height <= 0) {
@@ -870,7 +867,7 @@ function useMapCanvas(
     drawEgoCar(ctx, egoCanvas.x, egoCanvas.y, 1.05, 1, "white");
 
     ctx.restore();
-  }, [active, canvasRef, canvasSize, currentFrame, frames, viewport]);
+  }, [active, canvasRef, canvasSize, currentFrame, frames, renderOwner, viewport]);
 }
 
 type ProjectSiteProps = {
@@ -911,7 +908,7 @@ export function ProjectSite({ onOpenDemo, onTerrainPresetChange, playOpening, on
 
     <section className="demo-section" data-motion-section data-terrain-preset="demo" id="demo"><div className="content-width"><div className="demo-head"><div><div className="section-index" data-motion-index>04 / LIVE PROTOTYPE</div><MotionHeadline as="h2" label="真实场景中的证据链，直接进入驾驶舱" lines={[
       <>真实场景中的证据链，</>, <><em>直接进入驾驶舱</em></>,
-    ]} /></div><p data-motion-copy>当前工程 Demo 基于 nuScenes 连续场景：前视视频、LiDAR 点云、局部地图、目标风险、历史事件与 AI 诊断在同一时间轴联动。</p></div><BorderGlow as="div" className="demo-card motion-block" backgroundColor="#10292b"><div className="demo-card-top"><span><i /> DRIVEGUARD / LIVE DEMO</span><span>nuScenes mini · CAM_FRONT · LiDAR TOP</span></div><div className="demo-visual" data-motion-media-frame><video data-motion-media src="/sample.mp4" autoPlay muted loop playsInline /><div className="demo-overlay"><span>视频 · 点云 · 地图 · 诊断同步</span><b>风险诊断<br />驾驶舱</b><div className="demo-metrics"><span>CAM_FRONT</span><span>LiDAR BEV</span><span>AI DIAGNOSIS</span></div></div><div className="mini-map"><Map size={18}/><i/><i/><i/><b /></div></div><div className="demo-card-bottom"><p>打开后可查看感知框、原始点云、地图轨迹、全域诊断和历史风险事件回放。</p><button type="button" onClick={onOpenDemo}>打开驾驶舱 <ArrowUpRight size={17}/></button></div></BorderGlow></div></section>
+    ]} /></div><p data-motion-copy>当前工程 Demo 基于 nuScenes 连续场景：前视视频、LiDAR 点云、局部地图、目标风险、历史事件与 AI 诊断在同一时间轴联动。</p></div><BorderGlow as="div" className="demo-card motion-block" backgroundColor="#10292b"><div className="demo-card-top"><span><i /> DRIVEGUARD / LIVE DEMO</span><span>nuScenes mini · 前视视频 · 激光雷达</span></div><div className="demo-visual" data-motion-media-frame><video data-motion-media src="/sample.mp4" autoPlay muted loop playsInline /><div className="demo-overlay"><span>视频 · 点云 · 地图 · 诊断同步</span><b>风险诊断<br />驾驶舱</b><div className="demo-metrics"><span>前视视频</span><span>三维点云</span><span>AI 诊断</span></div></div><div className="mini-map"><Map size={18}/><i/><i/><i/><b /></div></div><div className="demo-card-bottom"><p>打开后可查看感知框、原始点云、地图轨迹、全域诊断和历史风险事件回放。</p><button type="button" onClick={onOpenDemo}>打开驾驶舱 <ArrowUpRight size={17}/></button></div></BorderGlow></div></section>
 
     <section className="product-section" data-motion-section data-terrain-preset="product" id="product"><div className="content-width"><div className="product-top"><div><div className="section-index" data-motion-index>05 / PRODUCT CAPABILITY</div><MotionHeadline as="h2" label="把每一次异常沉淀为下一次进化" lines={[
       <>把每一次异常</>, <>沉淀为下一次<em>进化</em></>,
@@ -959,8 +956,10 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [mapViewport, setMapViewport] = useState<MapViewport>(DEFAULT_MAP_VIEWPORT);
   const [showDashboard, setShowDashboard] = useState(false);
+  const [cockpitScreen, setCockpitScreen] = useState<CockpitScreen>("entry");
   const handleOpenDemo = useCallback(() => {
     showcaseOpeningPlayedRef.current = true;
+    setCockpitScreen("entry");
     setShowDashboard(true);
   }, []);
   const [terrainPreset, setTerrainPreset] = useState<ShowcaseTerrainPreset>("hidden");
@@ -991,9 +990,6 @@ function App() {
       })
       .sort((a, b) => riskScore(b.risk) - riskScore(a.risk) || (a.cameraBox?.depth ?? 999) - (b.cameraBox?.depth ?? 999))
       .slice(0, 14) ?? [];
-  const sceneName = datasetMeta?.sceneName ?? "等待数据";
-  const sampleCount = datasetMeta?.sampleCount ?? telemetry.length;
-  const fps = datasetMeta?.videoFps ?? datasetMeta?.fps ?? 24;
   const selectedScene = scenes.find((scene) => scene.id === selectedSceneId) ?? LEGACY_SCENE;
   const riskEvents = useMemo(() => deriveRiskEvents(telemetry, perception), [telemetry, perception]);
   const completedRiskEvents = useMemo(
@@ -1016,7 +1012,14 @@ function App() {
     currentPointCloud !== null,
   );
 
-  useMapCanvas(perception, currentPerception, mapCanvasRef, mapViewport, showDashboard);
+  useMapCanvas(
+    perception,
+    currentPerception,
+    mapCanvasRef,
+    mapViewport,
+    showDashboard && cockpitScreen !== "entry",
+    cockpitScreen,
+  );
 
   const updateMapZoom = useCallback((factor: number) => {
     setMapViewport((viewport) => ({ ...viewport, zoom: clampMapZoom(viewport.zoom * factor) }));
@@ -1236,7 +1239,6 @@ function App() {
         setTelemetry(nextTelemetry);
         setPerception(nextPerception);
         setDatasetMeta(nextMeta);
-        videoRef.current?.load();
       })
       .catch((fetchError: unknown) => {
         if (ownsScene()) {
@@ -1447,18 +1449,102 @@ function App() {
     setCurrentTime(replayTime);
   };
 
-  const metricItems = [
-    { label: "车速", value: `${formatNumber(currentFrame?.speedKmh ?? NaN)} km/h`, icon: Gauge },
-    { label: "刹车", value: formatNumber(currentFrame?.brake ?? NaN, 2), icon: ShieldCheck },
-    { label: "油门", value: formatNumber(currentFrame?.throttle ?? NaN, 2), icon: Zap },
-    { label: "转向", value: formatNumber(currentFrame?.steering ?? NaN, 2), icon: Activity },
-    { label: "加速度", value: `${formatNumber(currentFrame?.accel ?? NaN, 2)} m/s²`, icon: Radio },
-    { label: "目标", value: `${currentPerception?.objects.length ?? 0}`, icon: Layers3 },
-  ];
-
   const demoParam = new URLSearchParams(window.location.search).get("demo");
   const positioningOrbitDemo = demoParam === "positioning-orbit";
   const contextCardsDemo = demoParam === "context-cards";
+  const lidarSlot = (
+    <div className="cockpit-lidar-slot">
+      <div className="panel-title">
+        <Layers3 size={18} aria-hidden="true" />
+        <span>激光雷达三维点云</span>
+        <strong>高危 {highRiskObjects} / 中危 {mediumRiskObjects}</strong>
+      </div>
+      <LidarBev
+        sceneId={selectedScene.id}
+        pointCloud={currentPointCloud}
+        frame={currentPerception}
+        history={lidarHistory}
+        status={lidarDisplayState.tone}
+        errorMessage={lidarError}
+      />
+      <div className="lidar-metadata" aria-label="LiDAR 数据状态">
+        <span>源 {resolveLidarSource(selectedScene) ? "nuScenes 激光雷达" : "仅相机"}</span>
+        <span>点 {renderedLidarFrame?.pointCount.toLocaleString() ?? "--"}</span>
+        <span>关键帧 {renderedLidarFrame ? `${formatNumber(renderedLidarFrame.time, 2)}s` : "--"}</span>
+        <span className={`lidar-status lidar-status-${lidarDisplayState.tone}`}>{lidarDisplayState.text}</span>
+      </div>
+    </div>
+  );
+  const mapSlot = (
+    <div className="cockpit-map-slot">
+      <div className="panel-title">
+        <Map size={18} aria-hidden="true" />
+        <span>地图与轨迹</span>
+        <strong>{currentPerception ? `${formatNumber(currentPerception.ego.latitude, 5)}, ${formatNumber(currentPerception.ego.longitude, 5)}` : "--"}</strong>
+      </div>
+      <div className="canvas-stage map-stage">
+        <canvas
+          ref={mapCanvasRef}
+          className="interactive-map-canvas"
+          onPointerDown={handleMapPointerDown}
+          onPointerMove={handleMapPointerMove}
+          onPointerUp={handleMapPointerEnd}
+          onPointerCancel={handleMapPointerEnd}
+          onWheel={handleMapWheel}
+          aria-label="可缩放和平移的局部地图"
+        />
+        <div className="map-controls" aria-label="地图控制">
+          <button type="button" onClick={() => updateMapZoom(1.2)} title="放大地图" aria-label="放大地图"><Plus size={16} aria-hidden="true" /></button>
+          <button type="button" onClick={() => updateMapZoom(1 / 1.2)} title="缩小地图" aria-label="缩小地图"><Minus size={16} aria-hidden="true" /></button>
+          <button type="button" onClick={resetMapViewport} title="回到自车当前位置" aria-label="回到自车当前位置"><LocateFixed size={16} aria-hidden="true" /></button>
+        </div>
+        <div className="map-interaction-hint"><Move size={13} aria-hidden="true" /> 拖拽平移 · 滚轮缩放</div>
+      </div>
+    </div>
+  );
+  const historySlot = (
+    <div className="diagnosis-history-panel">
+      <div className="result-title">
+        <History size={18} aria-hidden="true" />
+        <span>历史风险事件</span>
+        <strong>{completedRiskEvents.length} 条</strong>
+      </div>
+      <p className="risk-events-hint">事件结束后自动归档；点击即可回到风险峰值帧，并同步视频、感知与轨迹视图。</p>
+      <RiskEventsList events={completedRiskEvents} currentTime={currentTime} onSeek={handleSeekRiskEvent} />
+    </div>
+  );
+  const diagnosisSlot = (
+    <aside className="diagnosis-panel">
+      <div className="panel-title">
+        <BrainCircuit size={18} aria-hidden="true" />
+        <span>AI 全域诊断</span>
+        <strong className={`status-dot status-${connectionStatus}`}>{statusText[connectionStatus]}</strong>
+      </div>
+      <div className="cockpit-diagnosis-progress" aria-label="诊断进度">
+        <span>诊断进度</span>
+        <strong>{diagnosing ? "处理中" : "等待启动"}</strong>
+        <i style={{ width: diagnosing ? "56%" : "0%" }} />
+      </div>
+      <button
+        className="diagnose-button"
+        type="button"
+        onClick={handleDiagnose}
+        disabled={diagnosing || connectionStatus !== "connected" || !currentFrame}
+      >
+        {diagnosing ? <LoaderCircle className="spin" size={19} /> : <BrainCircuit size={19} />}
+        {diagnosing ? "诊断中" : "全域诊断"}
+      </button>
+      {error && <div className="message error-message"><AlertTriangle size={18} aria-hidden="true" /><span>{error}</span></div>}
+      <div className="result-panel">
+        <div className="result-title"><BrainCircuit size={18} aria-hidden="true" /><span>诊断分析</span></div>
+        <p>{diagnosis?.thought ?? "点击全域诊断后，这里会展示后端返回的风险分析。"}</p>
+      </div>
+      <div className="result-panel conclusion-panel">
+        <div className="result-title"><ShieldCheck size={18} aria-hidden="true" /><span>最终结论</span></div>
+        <p>{diagnosis?.conclusion ?? "等待当前帧诊断结果。"}</p>
+      </div>
+    </aside>
+  );
   const currentView = !showDashboard ? (
     positioningOrbitDemo ? <PositioningOrbitDemo /> : contextCardsDemo ? <ContextCardsDemo /> : <ProjectSite
       onOpenDemo={handleOpenDemo}
@@ -1467,227 +1553,48 @@ function App() {
       onOpeningComplete={handleShowcaseOpeningComplete}
     />
   ) : (
-    <main className="app-shell">
-      <section className="command-grid">
-        <header className="header-bar">
-          <div>
-            <p className="eyebrow">nuScenes mini real-scene diagnosis</p>
-            <h1>智驾感知诊断驾驶舱</h1>
-          </div>
-          <div className="header-actions">
-            <button className="back-site-button" type="button" onClick={() => {
-              setTerrainPreset("hidden");
-              setShowDashboard(false);
-            }}>项目官网</button>
-            <label className="scene-selector" title="切换后会同步加载该场景的视频、车辆状态与感知数据">
-              <Database size={15} aria-hidden="true" />
-              <span>场景</span>
-              <select
-                value={selectedSceneId}
-                onChange={(event) => handleSceneSelection(event.target.value)}
-                disabled={sceneLoading}
-                aria-label="选择数据场景"
-              >
-                {scenes.map((scene) => <option value={scene.id} key={scene.id}>{scene.label}</option>)}
-              </select>
-              <ChevronDown size={14} aria-hidden="true" />
-            </label>
-            <span className={`status-dot status-${connectionStatus}`}>{statusText[connectionStatus]}</span>
-            <span className={`risk-pill risk-${panelRisk}`}>{riskText[panelRisk]}</span>
-          </div>
-        </header>
-
-        <section className="bev-panel">
-          <div className="panel-title">
-            <Layers3 size={18} aria-hidden="true" />
-            <span>LiDAR 3D/BEV 感知</span>
-            <strong>高危 {highRiskObjects} / 中危 {mediumRiskObjects}</strong>
-          </div>
-          <LidarBev sceneId={selectedScene.id} pointCloud={currentPointCloud} frame={currentPerception} history={lidarHistory} status={lidarDisplayState.tone} errorMessage={lidarError} />
-          <div className="lidar-metadata" aria-label="LiDAR 数据状态">
-            <span>源 {resolveLidarSource(selectedScene) ?? "camera-only"}</span>
-            <span>点 {renderedLidarFrame?.pointCount.toLocaleString() ?? "--"}</span>
-            <span>关键帧 {renderedLidarFrame ? `${formatNumber(renderedLidarFrame.time, 2)}s` : "--"}</span>
-            <span className={`lidar-status lidar-status-${lidarDisplayState.tone}`}>{lidarDisplayState.text}</span>
-          </div>
-          <div className="live-monitor-panel" aria-label="实时监测">
-            <div className="result-title">
-              <Activity size={18} aria-hidden="true" />
-              <span>实时监测</span>
-              <strong>{riskText[frameRisk]}</strong>
-            </div>
-            <div className="live-monitor-grid">
-              <span>当前目标 <strong>{currentPerception?.objects.length ?? 0}</strong></span>
-              <span>高危 <strong>{highRiskObjects}</strong></span>
-              <span>中危 <strong>{mediumRiskObjects}</strong></span>
-              <span>车速 <strong>{formatNumber(currentFrame?.speedKmh ?? NaN)} km/h</strong></span>
-            </div>
-            <p>{currentFrame?.scene ?? "等待 nuScenes telemetry 加载..."}</p>
-          </div>
-        </section>
-
-        <section className="camera-panel">
-          <div className="panel-title">
-            <Camera size={18} aria-hidden="true" />
-            <span>前视相机 CAM_FRONT</span>
-            <strong>{formatNumber(currentTime, 2)}s</strong>
-          </div>
-          <div className="video-frame">
-            <video
-              ref={videoRef}
-              key={selectedScene.id}
-              src={selectedScene.videoFile}
-              controls
-              autoPlay
-              muted
-              playsInline
-              loop
-              preload="auto"
-              onLoadedData={() => {
-                void videoRef.current?.play().catch(() => undefined);
-              }}
-            />
-            <div className="video-hud">
-              <span>VIDEO {formatNumber(fps, 0)} FPS</span>
-              <span>FRAME {currentPerception ? perception.indexOf(currentPerception) + 1 : "--"}/{sampleCount ?? telemetry.length}</span>
-              <span>{sceneLoading ? "场景加载中…" : sceneName}</span>
-            </div>
-            <div className="video-reticle" aria-hidden="true" />
-            <div className="camera-targets">
-              {visibleCameraObjects.map((object, index) => {
-                const box = object.cameraBox;
-                if (!box) {
-                  return null;
-                }
-                return (
-                  <span
-                    className={`camera-target target-${object.risk}`}
-                    key={`${object.id}-${index}`}
-                    style={{
-                      left: `${(box.x / box.imageWidth) * 100}%`,
-                      top: `${(box.y / box.imageHeight) * 100}%`,
-                      width: `${(box.width / box.imageWidth) * 100}%`,
-                      height: `${(box.height / box.imageHeight) * 100}%`,
-                    }}
-                    title={`${object.label} ${formatNumber(box.depth, 1)}m`}
-                  >
-                    <span>{object.label}</span>
-                  </span>
-                );
-              })}
-            </div>
-          </div>
-        </section>
-
-        <aside className="diagnosis-panel">
-          <div className="panel-title">
-            <BrainCircuit size={18} aria-hidden="true" />
-            <span>AI 全域诊断</span>
-          </div>
-
-          <div className="metrics-grid">
-            {metricItems.map((item) => {
-              const Icon = item.icon;
-              return (
-                <div className="metric-card" key={item.label}>
-                  <Icon size={17} aria-hidden="true" />
-                  <span>{item.label}</span>
-                  <strong>{item.value}</strong>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="scene-box">
-            <span>场景状态</span>
-            <p>{currentFrame?.scene ?? "等待 nuScenes telemetry 加载..."}</p>
-            <div className="risk-meter" aria-hidden="true">
-              <span className={`meter-segment ${panelRisk === "low" ? "meter-active" : ""}`} />
-              <span className={`meter-segment ${panelRisk === "medium" ? "meter-active" : ""}`} />
-              <span className={`meter-segment ${panelRisk === "high" ? "meter-active" : ""}`} />
-            </div>
-          </div>
-
-          <button
-            className="diagnose-button"
-            type="button"
-            onClick={handleDiagnose}
-            disabled={diagnosing || connectionStatus !== "connected" || !currentFrame}
-          >
-            {diagnosing ? <LoaderCircle className="spin" size={19} /> : <BrainCircuit size={19} />}
-            {diagnosing ? "诊断中" : "全域诊断"}
-          </button>
-
-          {error && (
-            <div className="message error-message">
-              <AlertTriangle size={18} aria-hidden="true" />
-              <span>{error}</span>
-            </div>
-          )}
-
-          <div className="result-panel">
-            <div className="result-title">
-              <BrainCircuit size={18} aria-hidden="true" />
-              <span>诊断分析</span>
-            </div>
-            <p>{diagnosis?.thought ?? "点击全域诊断后，这里会展示后端返回的风险分析。"}</p>
-          </div>
-
-          <div className="result-panel conclusion-panel">
-            <div className="result-title">
-              <ShieldCheck size={18} aria-hidden="true" />
-              <span>最终结论</span>
-            </div>
-            <p>{diagnosis?.conclusion ?? "等待当前帧诊断结果。"}</p>
-          </div>
-
-          <div className="diagnosis-history-panel">
-            <div className="result-title">
-              <History size={18} aria-hidden="true" />
-              <span>历史风险事件</span>
-              <strong>{completedRiskEvents.length} 条</strong>
-            </div>
-            <p className="risk-events-hint">事件结束后自动归档；点击即可回到风险峰值帧，并同步视频、感知与轨迹视图。</p>
-            <RiskEventsList events={completedRiskEvents} currentTime={currentTime} onSeek={handleSeekRiskEvent} />
-          </div>
-        </aside>
-
-        <section className="map-panel">
-          <div className="panel-title">
-            <Map size={18} aria-hidden="true" />
-            <span>地图与轨迹</span>
-            <strong>{currentPerception ? `${formatNumber(currentPerception.ego.latitude, 5)}, ${formatNumber(currentPerception.ego.longitude, 5)}` : "--"}</strong>
-          </div>
-          <div className="canvas-stage map-stage">
-            <canvas
-              ref={mapCanvasRef}
-              className="interactive-map-canvas"
-              onPointerDown={handleMapPointerDown}
-              onPointerMove={handleMapPointerMove}
-              onPointerUp={handleMapPointerEnd}
-              onPointerCancel={handleMapPointerEnd}
-              onWheel={handleMapWheel}
-              aria-label="可缩放和平移的局部地图"
-            />
-            <div className="map-controls" aria-label="地图控制">
-              <button type="button" onClick={() => updateMapZoom(1.2)} title="放大地图" aria-label="放大地图">
-                <Plus size={16} aria-hidden="true" />
-              </button>
-              <button type="button" onClick={() => updateMapZoom(1 / 1.2)} title="缩小地图" aria-label="缩小地图">
-                <Minus size={16} aria-hidden="true" />
-              </button>
-              <button type="button" onClick={resetMapViewport} title="回到自车当前位置" aria-label="回到自车当前位置">
-                <LocateFixed size={16} aria-hidden="true" />
-              </button>
-            </div>
-            <div className="map-interaction-hint">
-              <Move size={13} aria-hidden="true" /> 拖拽平移 · 滚轮缩放
-            </div>
-          </div>
-        </section>
-
-      </section>
-    </main>
+    <CockpitExperience
+      scenes={scenes}
+      selectedSceneKey={selectedScene.id}
+      sceneVideoSrc={selectedScene.videoFile}
+      sceneLoading={sceneLoading}
+      objects={visibleCameraObjects}
+      monitoring={{
+        currentObjects: currentPerception?.objects.length ?? 0,
+        highRiskObjects,
+        mediumRiskObjects,
+        frameRiskLabel: riskText[frameRisk],
+        errorMessage: error,
+        details: [
+          { label: "车速", value: `${formatNumber(currentFrame?.speedKmh ?? NaN)} km/h` },
+          { label: "刹车", value: formatNumber(currentFrame?.brake ?? NaN, 2) },
+          { label: "油门", value: formatNumber(currentFrame?.throttle ?? NaN, 2) },
+          { label: "转向", value: formatNumber(currentFrame?.steering ?? NaN, 2) },
+          { label: "加速度", value: `${formatNumber(currentFrame?.accel ?? NaN, 2)} m/s²` },
+          { label: "感知目标", value: `${currentPerception?.objects.length ?? 0}` },
+          { label: "场景状态", value: currentFrame?.scene ?? "等待车辆状态" },
+        ],
+      }}
+      lidarSlot={lidarSlot}
+      mapSlot={mapSlot}
+      historySlot={historySlot}
+      diagnosisSlot={diagnosisSlot}
+      reportExpanded={false}
+      videoRef={videoRef}
+      onSceneSelect={handleSceneSelection}
+      onScreenChange={setCockpitScreen}
+      onReturnSite={() => {
+        setTerrainPreset("hidden");
+        setCockpitScreen("entry");
+        setShowDashboard(false);
+      }}
+      onContact={() => {
+        setTerrainPreset("hidden");
+        setCockpitScreen("entry");
+        setShowDashboard(false);
+        window.setTimeout(() => document.getElementById("contact")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+      }}
+    />
   );
 
   return (

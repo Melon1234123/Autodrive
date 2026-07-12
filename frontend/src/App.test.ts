@@ -88,6 +88,25 @@ class IntersectionObserverMock {
 
 globalThis.IntersectionObserver = IntersectionObserverMock as unknown as typeof IntersectionObserver;
 
+function activateCockpitScreen(screenName: "实时解析" | "全域诊断") {
+  const root = document.querySelector<HTMLElement>(".cockpit-experience")!;
+  const sections = [
+    screen.getByRole("region", { name: "场景入口" }),
+    screen.getByRole("region", { name: "实时解析" }),
+    screen.getByRole("region", { name: "全域诊断" }),
+  ];
+  const activeIndex = screenName === "实时解析" ? 1 : 2;
+  Object.defineProperty(root, "scrollTop", { configurable: true, value: activeIndex * 1000, writable: true });
+  vi.spyOn(root, "getBoundingClientRect").mockReturnValue({ top: 0, height: 1000 } as DOMRect);
+  sections.forEach((section, index) => {
+    vi.spyOn(section, "getBoundingClientRect").mockReturnValue({
+      top: (index - activeIndex) * 1000,
+      height: 1000,
+    } as DOMRect);
+  });
+  fireEvent.scroll(root);
+}
+
 class WebSocketMock {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
@@ -144,9 +163,25 @@ it("keeps one terrain backdrop mounted while switching views", () => {
   fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
   expect(screen.getByTestId("terrain-backdrop-mock")).toBe(terrain);
   expect(terrain).toHaveAttribute("data-view", "dashboard");
-  fireEvent.click(screen.getByRole("button", { name: "项目官网" }));
+  fireEvent.click(screen.getByRole("button", { name: "返回官网" }));
   expect(screen.getByTestId("terrain-backdrop-mock")).toBe(terrain);
   expect(terrain).toHaveAttribute("data-preset", "hidden");
+});
+
+it("mounts the three-screen cockpit with one video and one active evidence workspace", () => {
+  render(createElement(App));
+  fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+
+  expect(screen.getByRole("region", { name: "场景入口" })).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "实时解析" })).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "全域诊断" })).toBeInTheDocument();
+  expect(document.querySelectorAll(".cockpit-experience video")).toHaveLength(1);
+  expect(screen.queryByTestId("lidar-bev-mock")).not.toBeInTheDocument();
+  expect(document.querySelector(".map-stage")).not.toBeInTheDocument();
+
+  activateCockpitScreen("实时解析");
+  expect(screen.getAllByTestId("lidar-bev-mock")).toHaveLength(1);
+  expect(document.querySelectorAll(".map-stage")).toHaveLength(1);
 });
 
 describe("cockpit replay integration", () => {
@@ -250,11 +285,12 @@ it("attaches the map resize observer when the cockpit canvas mounts", () => {
   ).classList.contains("map-stage")))).toBe(false);
 
   fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+  activateCockpitScreen("实时解析");
   const mapStage = document.querySelector(".map-stage");
   const mapObserver = resizeObserverInstances.find((observer) => observer.observe.mock.calls.some(([target]) => target === mapStage));
 
   expect(mapObserver).toBeDefined();
-  fireEvent.click(screen.getByRole("button", { name: "项目官网" }));
+  fireEvent.click(screen.getByRole("button", { name: "返回官网" }));
   expect(mapObserver?.disconnect).toHaveBeenCalledOnce();
 });
 
@@ -327,6 +363,7 @@ it("clears old scene coordinates until the selected scene perception resolves", 
 
   render(createElement(App));
   fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+  activateCockpitScreen("实时解析");
   const sceneSelector = await screen.findByRole("combobox", { name: "选择数据场景" });
   const mapPanel = document.querySelector(".map-panel") as HTMLElement;
   await waitFor(() => {
@@ -440,6 +477,7 @@ describe("scene-owned cockpit async state", () => {
 
     render(createElement(App));
     fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+    activateCockpitScreen("实时解析");
     const sceneSelector = await screen.findByRole("combobox", { name: "选择数据场景" });
     await waitFor(() => {
       expect(sceneSelector).toHaveValue("scene-a");
@@ -469,6 +507,7 @@ describe("scene-owned cockpit async state", () => {
 
     render(createElement(App));
     fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+    activateCockpitScreen("实时解析");
     await waitFor(() => {
       expect(screen.getByRole("combobox", { name: "选择数据场景" })).toHaveValue("scene-a");
       expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-cloud", "present");
@@ -491,6 +530,7 @@ describe("scene-owned cockpit async state", () => {
 
     render(createElement(App));
     fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+    activateCockpitScreen("全域诊断");
     const sceneSelector = await screen.findByRole("combobox", { name: "选择数据场景" });
     await waitFor(() => {
       expect(sceneSelector).toHaveValue("scene-a");

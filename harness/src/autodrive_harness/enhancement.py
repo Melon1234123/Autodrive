@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Protocol
 
 from .models import DiagnosisReport
-from .reporting import protected_fingerprint
+from .reporting import protected_fingerprint, validate_report_contract
 
 
 class ReportEnhancer(Protocol):
@@ -16,8 +16,16 @@ def enhance_report(local: DiagnosisReport, enhancer: ReportEnhancer) -> Diagnosi
     try:
         payload = enhancer.enhance(local.model_dump(mode="json"))
         candidate = DiagnosisReport.model_validate(payload)
+        validate_report_contract(candidate)
     except Exception:
         return local
     if protected_fingerprint(candidate) != before:
         return local
-    return candidate.model_copy(update={"generation_mode": "model-enhanced"})
+    try:
+        enhanced = DiagnosisReport.model_validate({
+            **candidate.model_dump(mode="json"),
+            "generation_mode": "model-enhanced",
+        })
+        return validate_report_contract(enhanced)
+    except Exception:
+        return local

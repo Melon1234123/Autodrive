@@ -29,11 +29,10 @@ def test_pipeline_includes_enhancement_stage_only_when_requested(real_catalog):
 
 
 def test_cli_writes_strict_scene_agnostic_json(real_catalog, tmp_path):
-    del real_catalog
     output = tmp_path / "diagnosis.json"
     result = main([
-        "--public-root", "frontend/public",
-        "--manifest", "frontend/public/scenes.json",
+        "--public-root", str(real_catalog.public_root),
+        "--manifest", str(real_catalog.manifest_path),
         "--scene-key", "default",
         "--data-version", "cli-test-v1",
         "--output", str(output),
@@ -43,3 +42,18 @@ def test_cli_writes_strict_scene_agnostic_json(real_catalog, tmp_path):
     assert payload["scene_name"] == "城市路口侧向超车"
     assert payload["data_version"] == "cli-test-v1"
     assert "scene-" not in output.read_text(encoding="utf-8")
+
+
+def test_pipeline_computes_causal_chains_once(real_catalog, monkeypatch):
+    import autodrive_harness.pipeline as pipeline
+
+    original = pipeline.build_causal_chains
+    calls = []
+
+    def counted(context):
+        calls.append(context.bundle.scene_key)
+        return original(context)
+
+    monkeypatch.setattr(pipeline, "build_causal_chains", counted)
+    pipeline.run_scene_diagnosis(real_catalog, "default", "test-v1")
+    assert calls == ["default"]

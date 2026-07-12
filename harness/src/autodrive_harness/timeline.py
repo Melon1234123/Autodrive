@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from bisect import bisect_left
+import math
 from typing import List, Sequence, TypeVar
-
-import numpy as np
 
 from .models import (
     LidarEvidence,
@@ -75,10 +74,19 @@ def align_timeline(bundle: SceneBundle, step_seconds: float = 0.1) -> List[Timel
     if end_time < start_time:
         raise TimelineAlignmentError("telemetry and perception have no overlapping time range")
 
-    raw_times = np.arange(start_time, end_time + step_seconds / 2.0, step_seconds)
-    times = [float(round(time, 6)) for time in raw_times if time <= end_time + 1e-9]
-    if not times:
-        times = [float(round(start_time, 6))]
+    times = [start_time]
+    index = 1
+    while True:
+        candidate = start_time + index * step_seconds
+        if candidate > end_time:
+            if math.isclose(candidate, end_time, rel_tol=0.0, abs_tol=1e-12):
+                candidate = end_time
+            else:
+                break
+        times.append(candidate)
+        if candidate == end_time:
+            break
+        index += 1
 
     samples: List[TimelineSample] = []
     for time in times:

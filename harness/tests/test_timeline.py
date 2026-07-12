@@ -43,3 +43,22 @@ def test_alignment_requires_positive_step_and_usable_modalities():
         align_timeline(bundle([0.0], [0.0]), 0.0)
     with pytest.raises(TimelineAlignmentError):
         align_timeline(bundle([], [0.0]), 0.1)
+
+
+def test_alignment_preserves_high_precision_single_source_time():
+    source_time = 0.10000051
+    samples = align_timeline(bundle([source_time], [source_time]), 0.1)
+    assert len(samples) == 1
+    assert samples[0].time == source_time
+    assert samples[0].telemetry.provenance == "source"
+    assert samples[0].telemetry.source_times == [source_time]
+
+
+def test_alignment_never_steps_past_high_precision_end_boundary():
+    end_time = 0.30000051
+    samples = align_timeline(
+        bundle([0.00000051, end_time], [0.00000051, end_time]), 0.1
+    )
+    assert samples[0].time == 0.00000051
+    assert all(sample.time <= end_time for sample in samples)
+    assert samples[-1].time <= end_time

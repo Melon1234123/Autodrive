@@ -16,23 +16,33 @@ def _risk_label(value: str) -> str:
 def build_causal_chains(context: DiagnosisContext) -> List[CausalChain]:
     chains: List[CausalChain] = []
     for episode in context.episodes:
+        if len(episode.evidence_ids) != 3:
+            raise ValueError("causal analysis requires three modality evidence ids per episode")
         if episode.control_conflict:
-            observation = f"在 {_time(episode.peak_time)} 秒检测到制动与油门输入重叠。"
-            mechanism = "推断：控制意图冲突会压缩纵向安全裕度。"
-            impact = "可能导致减速响应不一致。"
-        else:
-            observation = (
-                f"在 {_time(episode.peak_time)} 秒记录到持续{_risk_label(episode.risk)}风险目标。"
-            )
-            mechanism = "推断：风险目标持续存在会降低可用反应时间。"
-            impact = "可能增加轨迹规划与制动决策压力。"
-        chains.append(CausalChain(
-            observation=observation,
-            mechanism=mechanism,
-            possible_impact=impact,
-            evidence_ids=episode.evidence_ids,
-            confidence=context.scores.confidence,
-        ))
+            chains.append(CausalChain(
+                observation=f"在 {_time(episode.peak_time)} 秒检测到制动与油门输入重叠。",
+                mechanism="推断：控制意图冲突会压缩纵向安全裕度。",
+                possible_impact="可能导致减速响应不一致。",
+                evidence_ids=[episode.evidence_ids[1]],
+                confidence=context.scores.confidence,
+            ))
+        has_risk_object = any(
+            item.risk in {"medium", "high"}
+            for sample in context.samples
+            if episode.start_time <= sample.time <= episode.end_time
+            for item in sample.perception.value.objects
+        )
+        if has_risk_object:
+            chains.append(CausalChain(
+                observation=(
+                    f"在 {_time(episode.peak_time)} 秒记录到持续"
+                    f"{_risk_label(episode.risk)}风险目标。"
+                ),
+                mechanism="推断：风险目标持续存在会降低可用反应时间。",
+                possible_impact="可能增加轨迹规划与制动决策压力。",
+                evidence_ids=[episode.evidence_ids[0]],
+                confidence=context.scores.confidence,
+            ))
     if chains:
         return chains
     return [CausalChain(

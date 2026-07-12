@@ -46,9 +46,9 @@ def run_scene_diagnosis(
         data_version=data_version,
     )
     emit(DiagnosisProgress(stage="causality", percent=72))
-    build_causal_chains(context)
+    causal_chains = build_causal_chains(context)
     emit(DiagnosisProgress(stage="report", percent=86))
-    report = assemble_report(context)
+    report = assemble_report(context, causal_chains=causal_chains)
     if enhancer is not None:
         emit(DiagnosisProgress(stage="enhancement", percent=94))
         report = enhance_report(report, enhancer)

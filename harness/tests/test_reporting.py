@@ -1,4 +1,10 @@
-from autodrive_harness.reporting import assemble_report, protected_fingerprint
+import pytest
+
+from autodrive_harness.reporting import (
+    assemble_report,
+    protected_fingerprint,
+    validate_report_contract,
+)
 
 from test_causality import high_risk_context
 
@@ -15,6 +21,34 @@ def test_local_report_is_complete_and_has_no_raw_scene_id():
     assert report.evidence_index
     assert "scene-0796" not in report.model_dump_json()
     assert {item.id for item in report.evidence_index} >= set(report.timeline[0].evidence_ids)
+
+
+def test_analysis_sections_reference_only_matching_evidence_provenance():
+    report = assemble_report(high_risk_context())
+    evidence = {item.id: item for item in report.evidence_index}
+    expected = [
+        (report.perception_analysis, "perception", "real-derived"),
+        (report.motion_control_analysis, "telemetry", "estimated"),
+        (report.trajectory_analysis, "trajectory", "demo-visualization"),
+    ]
+    for section, source, provenance in expected:
+        assert section.evidence_ids
+        assert all(evidence[item].source == source for item in section.evidence_ids)
+        assert all(evidence[item].provenance == provenance for item in section.evidence_ids)
+    assert {item.source for item in report.evidence_index} >= {
+        "perception", "telemetry", "trajectory",
+    }
+    assert set(report.timeline[0].evidence_ids) == {
+        item.id for item in report.evidence_index
+    }
+
+
+def test_report_contract_rejects_dangling_evidence_anywhere():
+    report = assemble_report(high_risk_context())
+    payload = report.model_dump(mode="json")
+    payload["recommendations"][0]["evidence_ids"] = ["ev-9999"]
+    with pytest.raises(ValueError, match="dangling evidence"):
+        validate_report_contract(report.model_validate(payload))
 
 
 def test_protected_fingerprint_covers_facts_but_not_narrative():

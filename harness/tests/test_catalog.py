@@ -15,7 +15,7 @@ def _write_json(path: Path, payload) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def build_catalog(tmp_path: Path, scene_key: str = "safe-scene") -> SceneCatalog:
+def build_catalog(tmp_path: Path, scene_key: str = "default", label: str = "untrusted") -> SceneCatalog:
     public_root = tmp_path / "public"
     scene_root = public_root / "scenes" / scene_key
     telemetry = [{"time": 0.0, "speedKmh": 1.0, "brake": 0.0, "throttle": 0.1,
@@ -35,7 +35,7 @@ def build_catalog(tmp_path: Path, scene_key: str = "safe-scene") -> SceneCatalog
         "defaultSceneId": scene_key,
         "scenes": [{
             "id": scene_key,
-            "label": "安全测试场景",
+            "label": label,
             "description": "fixture",
             "telemetryFile": f"/scenes/{scene_key}/telemetry.json",
             "perceptionFile": f"/scenes/{scene_key}/perception.json",
@@ -51,14 +51,14 @@ def build_catalog(tmp_path: Path, scene_key: str = "safe-scene") -> SceneCatalog
 def test_catalog_rejects_unknown_and_traversal_scene_keys(tmp_path):
     catalog = build_catalog(tmp_path)
     with pytest.raises(SceneNotFoundError):
-        catalog.load("../safe-scene")
+        catalog.load("../default")
     with pytest.raises(SceneNotFoundError):
-        catalog.load("missing")
+        catalog.load("safe-scene")
 
 
 def test_catalog_loads_typed_scene_and_lidar_frames(tmp_path):
-    bundle = build_catalog(tmp_path).load("safe-scene")
-    assert bundle.scene_name == "安全测试场景"
+    bundle = build_catalog(tmp_path, label="internal-alias").load("default")
+    assert bundle.scene_name == "城市路口侧向超车"
     assert bundle.telemetry[0].speedKmh == 1.0
     assert bundle.perception[0].objects == []
     assert bundle.lidar_index is not None
@@ -71,4 +71,14 @@ def test_catalog_rejects_manifest_asset_outside_public_root(tmp_path):
     manifest["scenes"][0]["telemetryFile"] = "../secret.json"
     catalog.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(UnsafeAssetPathError):
-        catalog.load("safe-scene")
+        catalog.load("default")
+
+
+def test_catalog_rejects_lidar_frame_path_outside_public_root(tmp_path):
+    catalog = build_catalog(tmp_path)
+    index_path = tmp_path / "public" / "scenes" / "default" / "lidar" / "index.json"
+    payload = json.loads(index_path.read_text(encoding="utf-8"))
+    payload["frames"][0]["file"] = "../../../../../secret.bin"
+    index_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(UnsafeAssetPathError):
+        catalog.load("default")

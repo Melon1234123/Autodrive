@@ -61,6 +61,7 @@ def mine_risk_episodes(
     )
     episodes: List[RiskEpisode] = []
     for number, span in enumerate(spans, start=1):
+        evidence_start = (number - 1) * 3 + 1
         indices = range(span.start_index, span.end_index + 1)
         peak_candidates = [
             index for index in indices if levels[index] is not None
@@ -87,7 +88,11 @@ def mine_risk_episodes(
             peak_time=samples[peak_index].time,
             risk=risk,
             summary=summary,
-            evidence_ids=[f"ev-{number:04d}"],
+            evidence_ids=[
+                f"ev-{evidence_start:04d}",
+                f"ev-{evidence_start + 1:04d}",
+                f"ev-{evidence_start + 2:04d}",
+            ],
             control_conflict=conflict,
         ))
     return episodes

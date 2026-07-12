@@ -42,10 +42,14 @@ if [[ ! -x ".venv/bin/python" ]]; then
   python3 -m venv .venv
 fi
 
-if [[ ! -x ".venv/bin/uvicorn" ]]; then
+if [[ ! -x ".venv/bin/uvicorn" ]] || \
+  ! .venv/bin/python -c "import autodrive_harness" >/dev/null 2>&1; then
   echo "安装后端依赖..."
-  .venv/bin/python -m pip install --upgrade pip
-  .venv/bin/pip install -r requirements.txt
+  (
+    cd "$PROJECT_DIR"
+    "$BACKEND_DIR/.venv/bin/python" -m pip install --upgrade pip
+    "$BACKEND_DIR/.venv/bin/pip" install -r backend/requirements.txt
+  )
 fi
 
 if [[ -d "$DATASET_DIR/v1.0-mini" ]]; then

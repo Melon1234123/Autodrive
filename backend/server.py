@@ -7,15 +7,24 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
+from autodrive_harness import DiagnosisProgress, SceneCatalog, run_scene_diagnosis
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+if __package__:
+    from .diagnosis_jobs import DiagnosisJobManager
+else:
+    from diagnosis_jobs import DiagnosisJobManager
 
 BACKEND_DIR = Path(__file__).resolve().parent
+REPO_ROOT = BACKEND_DIR.parent
+PUBLIC_ROOT = (REPO_ROOT / "frontend" / "public").resolve()
+SCENE_MANIFEST = (PUBLIC_ROOT / "scenes.json").resolve()
 load_dotenv(BACKEND_DIR / ".env")
 
 app = FastAPI(title="Autodrive AI Diagnosis Backend")
@@ -27,13 +36,40 @@ app.add_middleware(
         "http://127.0.0.1:5173",
     ],
     allow_credentials=False,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-chat").strip()
+
+ALLOWED_SCENE_KEYS = frozenset(
+    {
+        "default",
+        "scene-0061",
+        "scene-0103",
+        "scene-0553",
+        "scene-0655",
+        "scene-0757",
+        "scene-0916",
+        "scene-1077",
+        "scene-1094",
+        "scene-1100",
+    }
+)
+scene_catalog = SceneCatalog(PUBLIC_ROOT, SCENE_MANIFEST)
+
+
+def run_diagnosis_pipeline(
+    scene_key: str,
+    data_version: str,
+    progress_callback: Callable[[DiagnosisProgress], None],
+):
+    return run_scene_diagnosis(scene_catalog, scene_key, data_version, progress_callback)
+
+
+diagnosis_jobs = DiagnosisJobManager(run_pipeline=run_diagnosis_pipeline)
 
 
 def has_model_credentials() -> bool:
@@ -62,6 +98,25 @@ class DiagnosisResult(BaseModel):
     mode: str = Field(default="fallback", pattern="^(model|fallback)$")
     model: Optional[str] = None
     diagnostics: Optional[str] = None
+
+
+class CreateDiagnosisRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    sceneKey: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_-]+$",
+        strict=True,
+    )
+    dataVersion: str = Field(min_length=1, max_length=128, strict=True)
+
+    @field_validator("sceneKey")
+    @classmethod
+    def scene_must_be_catalogued(cls, value: str) -> str:
+        if value not in ALLOWED_SCENE_KEYS:
+            raise ValueError("场景不在可用目录中")
+        return value
 
 
 def build_prompt(frame: TelemetryFrame) -> str:
@@ -294,6 +349,19 @@ async def root() -> dict[str, str]:
 async def health() -> dict[str, str]:
     mode = "model" if has_model_credentials() else "fallback"
     return {"status": "ok", "mode": mode, "model": OPENAI_MODEL}
+
+
+@app.post("/api/v1/diagnoses", status_code=202)
+async def create_diagnosis(request: CreateDiagnosisRequest) -> dict[str, Any]:
+    return diagnosis_jobs.create(request.sceneKey, request.dataVersion).public_snapshot()
+
+
+@app.get("/api/v1/diagnoses/{job_id}")
+async def get_diagnosis(job_id: str) -> dict[str, Any]:
+    record = diagnosis_jobs.get(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="诊断任务不存在")
+    return record.public_snapshot()
 
 
 @app.websocket("/ws")

@@ -4,3 +4,5 @@ websockets==14.1
 python-dotenv==1.0.1
 openai==1.59.6
 mcap==1.4.0
+pytest==8.3.4
+-e ./harness

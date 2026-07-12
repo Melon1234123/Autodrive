@@ -12,5 +12,6 @@ it("is hidden by default, decorative, and non-interactive", () => {
   expect(opening).toHaveAttribute("hidden");
   expect(opening).toHaveAttribute("aria-hidden", "true");
   expect(opening?.querySelectorAll("[data-motion-opening-panel]")).toHaveLength(3);
+  expect(opening?.querySelector("[data-motion-opening-rule]")).not.toBeInTheDocument();
   expect(opening?.querySelector("button,a,[tabindex]")).not.toBeInTheDocument();
 });

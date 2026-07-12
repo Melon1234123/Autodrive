@@ -143,7 +143,6 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
           const hero = root.querySelector<HTMLElement>("[data-motion-hero]");
           const heroMedia = root.querySelector<HTMLElement>("[data-motion-hero-media]");
           const openingPanels = Array.from(root.querySelectorAll<HTMLElement>("[data-motion-opening-panel]"));
-          const openingRule = root.querySelector<HTMLElement>("[data-motion-opening-rule]");
           const heroLines = Array.from(hero?.querySelectorAll<HTMLElement>("[data-motion-line]") ?? []);
           const navSurface = root.querySelector<HTMLElement>(".showcase-nav-glass");
 
@@ -152,7 +151,6 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
             const openingTimeline = gsap.timeline({ defaults: { ease: "power4.out" }, onComplete: finishOpening });
             openingTimeline
               .fromTo(heroMedia, { scale: 1.08 }, { scale: 1, duration: 3, willChange: "transform" }, 0)
-              .fromTo(openingRule, { scaleX: 0 }, { scaleX: 1, duration: .78 }, .12)
               .fromTo(openingPanels, { yPercent: 0 }, { yPercent: (index) => index % 2 ? 102 : -102, duration: 1.68, stagger: .08 }, .34)
               .fromTo(heroLines, { yPercent: 115, scaleY: .78 }, { yPercent: 0, scaleY: 1, duration: 1.4, stagger: .10 }, .88)
               .fromTo(".showcase-hero .kicker", { autoAlpha: 0, y: 30 }, { autoAlpha: 1, y: 0, duration: .9 }, 1.16)

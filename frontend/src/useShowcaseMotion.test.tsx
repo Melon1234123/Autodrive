@@ -386,6 +386,8 @@ it("creates one root-scoped synchronized runtime, handles anchors, and cleans up
   installMatchMedia({ reduced: false, desktop: true });
   const complete = vi.fn();
   const view = render(<Harness onOpeningComplete={complete} />);
+  expect(motionMocks.timelineTargets).not.toContain(null);
+  expect(view.container.querySelector("[data-motion-opening-rule]")).not.toBeInTheDocument();
   const root = view.container.querySelector("main") as HTMLElement;
   const content = root.querySelector("[data-lenis-content]");
   const staggerItem = root.querySelector("[data-motion-stagger-item]");

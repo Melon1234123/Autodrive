@@ -36,16 +36,6 @@
 
 .showcase-opening-panels>span:nth-child(2) { background:#173f38; }
 
-.showcase-opening-rule {
-  position:absolute;
-  top:50%;
-  left:7%;
-  width:86%;
-  height:1px;
-  background:currentColor;
-  transform-origin:left center;
-}
-
 .showcase-scroll-content { position:relative; width:100%; }
 .showcase.showcase-motion-active { scroll-behavior:auto; scroll-snap-type:none; }
 .showcase.showcase-opening-active .showcase-nav-glass { transition:none; }

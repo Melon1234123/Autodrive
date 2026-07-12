@@ -8,7 +8,6 @@ export default function ShowcaseOpening() {
         <span data-motion-opening-panel />
         <span data-motion-opening-panel />
       </div>
-      <span className="showcase-opening-rule" data-motion-opening-rule />
     </div>
   );
 }

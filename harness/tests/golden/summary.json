@@ -1,0 +1,52 @@
+{
+  "default": {
+    "event_count": 3,
+    "overall": 66,
+    "scene_name": "城市路口侧向超车"
+  },
+  "scene-0061": {
+    "event_count": 1,
+    "overall": 60,
+    "scene_name": "工区左转跟车"
+  },
+  "scene-0103": {
+    "event_count": 1,
+    "overall": 55,
+    "scene_name": "人车混流待转"
+  },
+  "scene-0553": {
+    "event_count": 1,
+    "overall": 34,
+    "scene_name": "斑马线母婴穿越"
+  },
+  "scene-0655": {
+    "event_count": 1,
+    "overall": 52,
+    "scene_name": "停车场行人横穿"
+  },
+  "scene-0757": {
+    "event_count": 1,
+    "overall": 41,
+    "scene_name": "繁忙路口公交博弈"
+  },
+  "scene-0916": {
+    "event_count": 1,
+    "overall": 64,
+    "scene_name": "停车区人车密集"
+  },
+  "scene-1077": {
+    "event_count": 1,
+    "overall": 56,
+    "scene_name": "夜间主干道施工"
+  },
+  "scene-1094": {
+    "event_count": 1,
+    "overall": 62,
+    "scene_name": "雨夜行人横穿"
+  },
+  "scene-1100": {
+    "event_count": 1,
+    "overall": 28,
+    "scene_name": "低照路口混行"
+  }
+}

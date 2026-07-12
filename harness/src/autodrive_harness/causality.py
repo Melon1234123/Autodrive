@@ -1,0 +1,44 @@
+from __future__ import annotations
+
+from typing import List
+
+from .models import CausalChain, DiagnosisContext
+
+
+def _time(value: float) -> str:
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _risk_label(value: str) -> str:
+    return {"high": "高", "medium": "中"}[value]
+
+
+def build_causal_chains(context: DiagnosisContext) -> List[CausalChain]:
+    chains: List[CausalChain] = []
+    for episode in context.episodes:
+        if episode.control_conflict:
+            observation = f"在 {_time(episode.peak_time)} 秒检测到制动与油门输入重叠。"
+            mechanism = "推断：控制意图冲突会压缩纵向安全裕度。"
+            impact = "可能导致减速响应不一致。"
+        else:
+            observation = (
+                f"在 {_time(episode.peak_time)} 秒记录到持续{_risk_label(episode.risk)}风险目标。"
+            )
+            mechanism = "推断：风险目标持续存在会降低可用反应时间。"
+            impact = "可能增加轨迹规划与制动决策压力。"
+        chains.append(CausalChain(
+            observation=observation,
+            mechanism=mechanism,
+            possible_impact=impact,
+            evidence_ids=episode.evidence_ids,
+            confidence=context.scores.confidence,
+        ))
+    if chains:
+        return chains
+    return [CausalChain(
+        observation="在可用时间范围内未形成持续风险事件。",
+        mechanism="推断：当前规则阈值下没有足够证据支持具体因果机制。",
+        possible_impact="可能存在未被现有传感模态覆盖的低强度风险。",
+        evidence_ids=["ev-0001"],
+        confidence=context.scores.confidence,
+    )]

@@ -195,15 +195,25 @@ function expectContinuousMediaProgress({
   before,
   after,
   duration,
+  elapsedWallSeconds,
+  playbackRate,
   transition,
 }: {
   before: number;
   after: number;
   duration: number;
+  elapsedWallSeconds: number;
+  playbackRate: number;
   transition: string;
 }) {
   const sampleTolerance = 0.08;
+  const schedulingTolerance = 0.35;
   const wrapWindow = 1;
+  const absoluteProgressCap = 3;
+  const maxForwardDelta = Math.min(
+    absoluteProgressCap,
+    elapsedWallSeconds * playbackRate + schedulingTolerance,
+  );
   const timeDropped = after < before - sampleTolerance;
   let forwardDelta: number;
 
@@ -226,8 +236,17 @@ function expectContinuousMediaProgress({
     forwardDelta = Math.max(0, after - before);
   }
 
-  expect(forwardDelta, `${transition}: playing media must continue advancing`).toBeGreaterThan(0.02);
-  expect(forwardDelta, `${transition}: screen transition took an implausible amount of media time`).toBeLessThanOrEqual(10);
+  const progressDetails = [
+    `observed=${forwardDelta.toFixed(3)}s`,
+    `max=${maxForwardDelta.toFixed(3)}s`,
+    `wall=${elapsedWallSeconds.toFixed(3)}s`,
+    `rate=${playbackRate}`,
+  ].join(", ");
+  expect(forwardDelta, `${transition}: playing media must continue advancing (${progressDetails})`).toBeGreaterThan(0.02);
+  expect(
+    forwardDelta,
+    `${transition}: media advanced beyond the wall-time playback budget (${progressDetails})`,
+  ).toBeLessThanOrEqual(maxForwardDelta);
 }
 
 test("keeps one continuous video across all three screens", async ({ page }) => {
@@ -236,25 +255,34 @@ test("keeps one continuous video across all three screens", async ({ page }) => 
   const handle = await video.elementHandle();
   await video.evaluate((node: HTMLVideoElement) => {
     node.currentTime = 2;
-    node.playbackRate = 0.125;
+    node.playbackRate = 0.0625;
     return node.play();
   });
   await expect.poll(() => video.evaluate((node: HTMLVideoElement) => node.currentTime)).toBeGreaterThan(2.05);
-  const before = await video.evaluate((node: HTMLVideoElement) => ({ time: node.currentTime, paused: node.paused, duration: node.duration }));
+  const before = await video.evaluate((node: HTMLVideoElement) => ({
+    time: node.currentTime,
+    paused: node.paused,
+    duration: node.duration,
+    rate: node.playbackRate,
+  }));
 
+  const transitionStartedAt = performance.now();
   await navigateByWheel(page, "live");
   await expect(page.getByRole("region", { name: "实时解析" })).toBeInViewport();
   await expect(page.locator("video")).toHaveCount(1);
   expect(await page.evaluate((original) => document.querySelector("video") === original, handle)).toBe(true);
   const live = await video.evaluate((node: HTMLVideoElement) => ({ time: node.currentTime, paused: node.paused, rate: node.playbackRate }));
+  const elapsedWallSeconds = (performance.now() - transitionStartedAt) / 1_000;
   expectContinuousMediaProgress({
     before: before.time,
     after: live.time,
     duration: before.duration,
+    elapsedWallSeconds,
+    playbackRate: before.rate,
     transition: "entry -> live",
   });
   expect(live.paused).toBe(false);
-  expect(live.rate).toBe(0.125);
+  expect(live.rate).toBe(0.0625);
 
   await video.evaluate((node: HTMLVideoElement) => {
     node.currentTime = 3;

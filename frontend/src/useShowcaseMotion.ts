@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
-import Lenis from "lenis";
+import Lenis, { type VirtualScrollData } from "lenis";
 import Snap from "lenis/snap";
 import "lenis/dist/lenis.css";
 import { gsap } from "gsap";
@@ -21,6 +21,11 @@ type ShowcaseMotionOptions = {
 };
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+const WHEEL_GESTURE_SETTLE_MS = 120;
+const WHEEL_GESTURE_EXCLUSION = [
+  "input", "textarea", "select", "[contenteditable]:not([contenteditable='false'])",
+  "[data-lenis-prevent]", "[data-lenis-prevent-wheel]", "[data-lenis-prevent-vertical]",
+].join(",");
 
 function clearMotionStyles(root: HTMLElement) {
   const targets = root.querySelectorAll<HTMLElement>([
@@ -92,6 +97,8 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
       let pageNavigationLocked = shouldPlayOpening;
       let unsubscribeScroll: (() => void) | null = null;
       let refreshFrame = 0;
+      let wheelGestureTimer = 0;
+      let wheelGestureActive = false;
       let ticker: ((time: number) => void) | null = null;
       let runtimeActive = true;
 
@@ -104,6 +111,56 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
         if (index === currentPageIndex()) return true;
         snap.goTo(index);
         return true;
+      };
+
+      const resumeSnapWhenReady = () => {
+        if (runtimeActive && !pageNavigationLocked && !wheelGestureActive) snap?.start();
+      };
+
+      const holdWheelGesture = () => {
+        wheelGestureActive = true;
+        window.clearTimeout(wheelGestureTimer);
+        wheelGestureTimer = window.setTimeout(() => {
+          wheelGestureTimer = 0;
+          wheelGestureActive = false;
+          resumeSnapWhenReady();
+        }, WHEEL_GESTURE_SETTLE_MS);
+      };
+
+      const hasExcludedWheelTarget = (event: WheelEvent) => {
+        const path = event.composedPath();
+        const rootIndex = path.indexOf(root);
+        const scopedPath = rootIndex >= 0 ? path.slice(0, rootIndex) : path;
+        if (scopedPath.some((node) => node instanceof Element && node.matches(WHEEL_GESTURE_EXCLUSION))) return true;
+        let target = event.target instanceof Element ? event.target : null;
+        while (target && target !== root) {
+          if (target.matches(WHEEL_GESTURE_EXCLUSION)) return true;
+          target = target.parentElement;
+        }
+        return false;
+      };
+
+      const handleVirtualScroll = ({ deltaX, deltaY, event }: VirtualScrollData) => {
+        if (!runtimeActive) return true;
+        if (event.type !== "wheel") return true;
+        const wheelEvent = event as WheelEvent;
+        const gestureWasActive = wheelGestureActive;
+        snap?.stop();
+        holdWheelGesture();
+
+        const isVertical = deltaY !== 0 && Math.abs(deltaY) > Math.abs(deltaX);
+        const isModified = wheelEvent.altKey || wheelEvent.ctrlKey || wheelEvent.metaKey || wheelEvent.shiftKey;
+        if (
+          !wheelEvent.cancelable || wheelEvent.defaultPrevented || !isVertical || isModified ||
+          hasExcludedWheelTarget(wheelEvent)
+        ) return false;
+
+        wheelEvent.preventDefault();
+        if (gestureWasActive || pageNavigationLocked || lenis?.isLocked) return false;
+        const command = deltaY > 0 ? "next" : "previous";
+        const destination = resolveShowcasePageDestination(command, currentPageIndex(), pages.length);
+        if (destination !== null) goToPage(destination);
+        return false;
       };
 
       const handleAnchorClick = (event: MouseEvent) => {
@@ -136,7 +193,7 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
         opening?.setAttribute("hidden", "");
         root.classList.remove("showcase-opening-active");
         pageNavigationLocked = false;
-        snap?.start();
+        resumeSnapWhenReady();
         lenis?.start();
         resolveOpening();
       };
@@ -145,10 +202,12 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
         if (!runtimeActive) return;
         runtimeActive = false;
         window.cancelAnimationFrame(refreshFrame);
+        window.clearTimeout(wheelGestureTimer);
         root.removeEventListener("click", handleAnchorClick);
         window.removeEventListener("keydown", handlePageKey);
         unsubscribeScroll?.();
         if (ticker) gsap.ticker.remove(ticker);
+        snap?.stop();
         snap?.destroy();
         snap = null;
         lenis?.stop();
@@ -168,14 +227,21 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
           smoothWheel: true,
           syncTouch: false,
           overscroll: true,
+          virtualScroll: handleVirtualScroll,
         });
         snap = new Snap(lenis, {
           type: "lock",
           duration: 1.05,
           debounce: 90,
           easing,
-          onSnapStart: () => { pageNavigationLocked = true; },
-          onSnapComplete: () => { pageNavigationLocked = false; },
+          onSnapStart: () => {
+            pageNavigationLocked = true;
+            snap?.stop();
+          },
+          onSnapComplete: () => {
+            pageNavigationLocked = false;
+            resumeSnapWhenReady();
+          },
         });
         snap.addElements(pages, { align: "start", ignoreTransform: true });
         unsubscribeScroll = lenis.on("scroll", ScrollTrigger.update);

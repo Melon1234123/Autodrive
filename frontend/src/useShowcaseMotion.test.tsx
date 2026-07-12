@@ -64,6 +64,7 @@ const motionMocks = vi.hoisted(() => {
     lenisScrollTo: vi.fn(),
     lenisDestroy: vi.fn(),
     lenisIsLocked: false,
+    lenisOptions: null as Record<string, unknown> | null,
     unsubscribe: vi.fn(),
     snapConstruct: vi.fn(),
     snapAddElements: vi.fn(),
@@ -105,7 +106,10 @@ vi.mock("gsap/ScrollTrigger", () => ({
 
 vi.mock("lenis", () => ({
   default: class LenisMock {
-    constructor(options: unknown) { motionMocks.lenisConstruct(options); }
+    constructor(options: unknown) {
+      motionMocks.lenisOptions = options as Record<string, unknown>;
+      motionMocks.lenisConstruct(options);
+    }
     get isLocked() { return motionMocks.lenisIsLocked; }
     on(event: string, callback: unknown) { motionMocks.lenisOn(event, callback); return motionMocks.unsubscribe; }
     stop() { motionMocks.lenisStop(); }
@@ -268,12 +272,35 @@ function sectionTimelineOptions(section: Element) {
   ));
 }
 
+function emitVirtualWheel({
+  deltaX = 0,
+  deltaY,
+  target,
+  ...eventInit
+}: WheelEventInit & { deltaY: number; target: Element }) {
+  const event = new WheelEvent("wheel", {
+    bubbles: true,
+    cancelable: true,
+    deltaX,
+    deltaY,
+    ...eventInit,
+  });
+  Object.defineProperty(event, "target", { configurable: true, value: target });
+  const result = (motionMocks.lenisOptions?.virtualScroll as ((data: {
+    deltaX: number;
+    deltaY: number;
+    event: WheelEvent | TouchEvent;
+  }) => boolean) | undefined)?.({ deltaX, deltaY, event });
+  return { event, result };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   motionMocks.timelineOptions.length = 0;
   motionMocks.timelineTargets.length = 0;
   motionMocks.timelineFromToCalls.length = 0;
   motionMocks.lenisIsLocked = false;
+  motionMocks.lenisOptions = null;
   motionMocks.snapOptions = null;
   motionMocks.throwOnContext = false;
   motionMocks.throwOnSnap = false;
@@ -285,6 +312,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -592,6 +620,118 @@ it("holds direct page commands until the stopped opening runtime has restarted",
   expect(fireEvent.click(screen.getByRole("link", { name: "产品体系" }))).toBe(false);
   expect(motionMocks.snapGoTo).toHaveBeenCalledWith(5);
   expect(window.location.hash).toBe("#product");
+});
+
+it("turns small and huge vertical wheel gestures into adjacent Snap travel", () => {
+  vi.useFakeTimers();
+  installMatchMedia({ reduced: false, desktop: true });
+  const view = render(<Harness playOpening={false} />);
+  const root = view.container.querySelector("main") as HTMLElement;
+  const content = root.querySelector("[data-lenis-content]") as HTMLElement;
+  const pages = Array.from(content.querySelectorAll<HTMLElement>(
+    ":scope > .showcase-hero, :scope > [data-motion-section]",
+  ));
+  pages.forEach((page, index) => {
+    Object.defineProperty(page, "offsetTop", { configurable: true, value: index * 900 });
+  });
+  const completeSnap = motionMocks.snapOptions?.onSnapComplete as ((item: unknown) => void);
+
+  expect(motionMocks.lenisOptions?.virtualScroll).toEqual(expect.any(Function));
+  motionMocks.snapGoTo.mockClear();
+
+  root.scrollTop = 0;
+  const smallDown = emitVirtualWheel({ deltaY: 1, target: root });
+  expect(smallDown.result).toBe(false);
+  expect(smallDown.event.defaultPrevented).toBe(true);
+  expect(motionMocks.snapGoTo).toHaveBeenLastCalledWith(1);
+
+  const sameBurstHugeDown = emitVirtualWheel({ deltaY: 100_000, target: root });
+  expect(sameBurstHugeDown.result).toBe(false);
+  expect(sameBurstHugeDown.event.defaultPrevented).toBe(true);
+  expect(motionMocks.snapGoTo).toHaveBeenCalledTimes(1);
+
+  completeSnap({ index: 1, value: 900 });
+  root.scrollTop = 900;
+  const settlingBurst = emitVirtualWheel({ deltaY: 100_000, target: root });
+  expect(settlingBurst.event.defaultPrevented).toBe(true);
+  expect(motionMocks.snapGoTo).toHaveBeenCalledTimes(1);
+  act(() => vi.advanceTimersByTime(121));
+  const hugeDown = emitVirtualWheel({ deltaY: 100_000, target: root });
+  expect(hugeDown.result).toBe(false);
+  expect(hugeDown.event.defaultPrevented).toBe(true);
+  expect(motionMocks.snapGoTo).toHaveBeenLastCalledWith(2);
+
+  completeSnap({ index: 2, value: 1800 });
+  root.scrollTop = 1800;
+  act(() => vi.advanceTimersByTime(121));
+  const hugeUp = emitVirtualWheel({ deltaY: -100_000, target: root });
+  expect(hugeUp.result).toBe(false);
+  expect(hugeUp.event.defaultPrevented).toBe(true);
+  expect(motionMocks.snapGoTo).toHaveBeenLastCalledWith(1);
+
+  completeSnap({ index: 1, value: 900 });
+  root.scrollTop = 900;
+  act(() => vi.advanceTimersByTime(121));
+  emitVirtualWheel({ deltaY: -1, target: root });
+  expect(motionMocks.snapGoTo).toHaveBeenLastCalledWith(0);
+  completeSnap({ index: 0, value: 0 });
+  root.scrollTop = 0;
+  act(() => vi.advanceTimersByTime(121));
+
+  const firstPageUp = emitVirtualWheel({ deltaY: -500, target: root });
+  expect(firstPageUp.result).toBe(false);
+  expect(firstPageUp.event.defaultPrevented).toBe(true);
+  expect(motionMocks.snapGoTo.mock.calls.map(([index]) => index)).toEqual([1, 2, 1, 0]);
+  act(() => vi.advanceTimersByTime(121));
+
+  root.scrollTop = 5400;
+  const lastPageDown = emitVirtualWheel({ deltaY: 500, target: root });
+  expect(lastPageDown.result).toBe(false);
+  expect(lastPageDown.event.defaultPrevented).toBe(true);
+  expect(motionMocks.snapGoTo.mock.calls.map(([index]) => index)).toEqual([1, 2, 1, 0]);
+});
+
+it("leaves inappropriate virtual input alone and fully disposes the wheel gate", () => {
+  vi.useFakeTimers();
+  installMatchMedia({ reduced: false, desktop: true });
+  const view = render(<Harness playOpening={false} />);
+  const root = view.container.querySelector("main") as HTMLElement;
+  const input = screen.getByLabelText("导航输入");
+  const nested = document.createElement("div");
+  nested.setAttribute("data-lenis-prevent-wheel", "");
+  root.append(nested);
+
+  expect(motionMocks.lenisOptions?.virtualScroll).toEqual(expect.any(Function));
+  const ignored = [
+    emitVirtualWheel({ deltaX: 100, deltaY: 10, target: root }),
+    emitVirtualWheel({ deltaY: 100, ctrlKey: true, target: root }),
+    emitVirtualWheel({ deltaY: 100, metaKey: true, target: root }),
+    emitVirtualWheel({ deltaY: 100, altKey: true, target: root }),
+    emitVirtualWheel({ deltaY: 100, shiftKey: true, target: root }),
+    emitVirtualWheel({ deltaY: 100, target: input }),
+    emitVirtualWheel({ deltaY: 100, target: nested }),
+  ];
+  expect(ignored.every(({ event, result }) => result === false && !event.defaultPrevented)).toBe(true);
+  expect(motionMocks.snapGoTo).not.toHaveBeenCalled();
+
+  const retainedHandler = motionMocks.lenisOptions!.virtualScroll as (data: {
+    deltaX: number;
+    deltaY: number;
+    event: WheelEvent | TouchEvent;
+  }) => boolean;
+  const snapStartsBeforeDispose = motionMocks.snapStart.mock.calls.length;
+  view.unmount();
+  expect(motionMocks.snapStop.mock.invocationCallOrder.at(-1)).toBeLessThan(
+    motionMocks.snapDestroy.mock.invocationCallOrder[0],
+  );
+
+  const postUnmountEvent = new WheelEvent("wheel", { cancelable: true });
+  const postUnmountResult = retainedHandler({ deltaX: 0, deltaY: 100, event: postUnmountEvent });
+  act(() => vi.advanceTimersByTime(500));
+  expect(postUnmountResult).toBe(true);
+  expect(postUnmountEvent.defaultPrevented).toBe(false);
+  expect(motionMocks.snapGoTo).not.toHaveBeenCalled();
+  expect(motionMocks.snapStart).toHaveBeenCalledTimes(snapStartsBeforeDispose);
 });
 
 it("locks page keys until Snap completes and leaves rejected keyboard input untouched", () => {

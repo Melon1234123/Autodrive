@@ -124,3 +124,35 @@ it("keeps one physical video and only mounts heavy evidence for the active analy
   expect(screen.getAllByTestId("map-slot")).toHaveLength(1);
   expect(container.querySelector(".camera-targets")).toBeInTheDocument();
 });
+
+it.each([
+  { screenName: "实时解析", activeScreen: "live", scrollTop: 1000 },
+  { screenName: "全域诊断", activeScreen: "diagnosis", scrollTop: 2000 },
+] as const)("switches scenes from $activeScreen without leaving or scrolling the active screen", ({ screenName, activeScreen, scrollTop }) => {
+  const { container } = render(createElement(CockpitExperience, cockpitProps()));
+  const root = container.querySelector<HTMLElement>(".cockpit-experience")!;
+  const entry = screen.getByRole("region", { name: "场景入口" });
+  const live = screen.getByRole("region", { name: "实时解析" });
+  const diagnosis = screen.getByRole("region", { name: "全域诊断" });
+  const activeIndex = activeScreen === "live" ? 1 : 2;
+  Object.defineProperty(root, "scrollTop", { configurable: true, value: scrollTop, writable: true });
+  vi.spyOn(root, "getBoundingClientRect").mockReturnValue({ top: 0, height: 1000 } as DOMRect);
+  [entry, live, diagnosis].forEach((region, index) => {
+    vi.spyOn(region, "getBoundingClientRect").mockReturnValue({
+      top: (index - activeIndex) * 1000,
+      height: 1000,
+    } as DOMRect);
+  });
+  fireEvent.scroll(root);
+  const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+
+  fireEvent.change(screen.getByRole("combobox", { name: "选择数据场景" }), {
+    target: { value: "scene-0061" },
+  });
+
+  expect(onSceneSelect).toHaveBeenCalledWith("scene-0061");
+  expect(root).toHaveAttribute("data-active-screen", activeScreen);
+  expect(root.scrollTop).toBe(scrollTop);
+  expect(scroll).not.toHaveBeenCalled();
+  expect(screen.getByRole("region", { name: screenName })).toBeInTheDocument();
+});

@@ -498,6 +498,31 @@ describe("scene-owned cockpit async state", () => {
     expect(screen.getByLabelText("LiDAR 数据状态")).toHaveTextContent("关键帧 --");
   });
 
+  it("keeps active-scene evidence intact when the same scene is selected again", async () => {
+    vi.stubGlobal("fetch", createSceneFetch({ withLidar: true }));
+
+    render(createElement(App));
+    fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+    activateCockpitScreen("实时解析");
+    const sceneSelector = await screen.findByRole("combobox", { name: "选择数据场景" });
+    await waitFor(() => {
+      expect(sceneSelector).toHaveValue("scene-a");
+      expect(sceneSelector).toBeEnabled();
+      expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-cloud", "present");
+      expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-status", "ready");
+      expect(document.querySelector(".map-panel .panel-title strong")).toHaveTextContent("31.10000, 121.50000");
+    });
+
+    appTestHarness.lidarSnapshots.length = 0;
+    fireEvent.change(sceneSelector, { target: { value: "scene-a" } });
+
+    expect(appTestHarness.lidarSnapshots.some((snapshot) => snapshot.pointCloud === null)).toBe(false);
+    expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-cloud", "present");
+    expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-status", "ready");
+    expect(screen.getByLabelText("LiDAR 数据状态")).toHaveTextContent("已同步");
+    expect(document.querySelector(".map-panel .panel-title strong")).toHaveTextContent("31.10000, 121.50000");
+  });
+
   it("keeps healthy LiDAR available when the telemetry bundle fails", async () => {
     let rejectTelemetry!: (reason: Error) => void;
     const pendingTelemetry = new Promise<Response>((_resolve, reject) => {

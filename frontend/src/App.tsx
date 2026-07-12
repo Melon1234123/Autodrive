@@ -950,6 +950,8 @@ function App() {
   const scenesRef = useRef(scenes);
   scenesRef.current = scenes;
   const [selectedSceneId, setSelectedSceneId] = useState(LEGACY_SCENE.id);
+  const selectedSceneIdRef = useRef(selectedSceneId);
+  selectedSceneIdRef.current = selectedSceneId;
   const [sceneLoading, setSceneLoading] = useState(true);
   const [diagnosisMode, setDiagnosisMode] = useState<DiagnosisMode>("unknown");
   const [backendModel, setBackendModel] = useState<string | null>(null);
@@ -1063,6 +1065,8 @@ function App() {
   }, []);
 
   const handleSceneSelection = useCallback((nextSceneId: string, nextSceneEntry?: SceneManifestEntry) => {
+    if (nextSceneId === selectedSceneIdRef.current) return;
+    selectedSceneIdRef.current = nextSceneId;
     sceneGenerationRef.current += 1;
     diagnosisRequestGenerationRef.current += 1;
     const pendingDiagnosis = pendingDiagnosisRef.current;

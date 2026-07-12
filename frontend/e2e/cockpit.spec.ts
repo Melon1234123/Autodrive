@@ -49,6 +49,43 @@ async function selectScene(page: Page, name: string) {
   await expect(select).toHaveValue(value!);
 }
 
+async function armSceneResetProbe(video: Locator) {
+  await video.evaluate((node: HTMLVideoElement) => {
+    const state = window as typeof window & { __sceneResetTime?: number };
+    delete state.__sceneResetTime;
+    node.addEventListener("loadstart", () => { state.__sceneResetTime = node.currentTime; }, { once: true });
+  });
+}
+
+async function expectSceneResetNearZero(video: Locator) {
+  await expect.poll(() => video.evaluate(() => (
+    window as typeof window & { __sceneResetTime?: number }
+  ).__sceneResetTime)).toBeLessThan(0.5);
+}
+
+async function switchSceneAndExpectPlayback(
+  page: Page,
+  name: string,
+  expectedSrc: string,
+  activeScreen: "live" | "diagnosis",
+  originalVideo: Awaited<ReturnType<Locator["elementHandle"]>>,
+) {
+  const root = page.locator(".cockpit-experience");
+  const video = page.getByTestId("persistent-scene-video");
+  const beforeScroll = await root.evaluate((node) => node.scrollTop);
+  await video.evaluate((node: HTMLVideoElement) => { node.playbackRate = 0.125; });
+  await armSceneResetProbe(video);
+  await selectScene(page, name);
+  await expect(video).toHaveAttribute("src", expectedSrc);
+  await expectSceneResetNearZero(video);
+  await expect.poll(() => video.evaluate((node: HTMLVideoElement) => node.readyState)).toBeGreaterThanOrEqual(3);
+  const media = await video.evaluate((node: HTMLVideoElement) => ({ paused: node.paused }));
+  expect(await page.evaluate((original) => document.querySelector("video") === original, originalVideo)).toBe(true);
+  expect(media.paused).toBe(false);
+  await expect(root).toHaveAttribute("data-active-screen", activeScreen);
+  expect(Math.abs(await root.evaluate((node) => node.scrollTop) - beforeScroll)).toBeLessThan(2);
+}
+
 async function waitForReport(page: Page) {
   const generate = page.getByRole("button", { name: "生成全场景报告" });
   await expect(generate).toBeEnabled();
@@ -116,12 +153,18 @@ async function screenshotSignal(locator: Locator) {
     const context = canvas.getContext("2d", { willReadFrequently: true });
     context?.drawImage(image, 0, 0);
     const pixels = context?.getImageData(0, 0, canvas.width, canvas.height).data ?? [];
-    const colors = new Set<number>();
+    const colors = new Map<number, number>();
+    let checksum = 0;
+    let sampled = 0;
     const stride = Math.max(4, Math.floor(pixels.length / 20_000 / 4) * 4);
     for (let index = 0; index < pixels.length; index += stride) {
-      colors.add((pixels[index] << 16) | (pixels[index + 1] << 8) | pixels[index + 2]);
+      const color = (pixels[index] << 16) | (pixels[index + 1] << 8) | pixels[index + 2];
+      colors.set(color, (colors.get(color) ?? 0) + 1);
+      checksum = (checksum + color * (index + 1)) % 2_147_483_647;
+      sampled += 1;
     }
-    return { width: canvas.width, height: canvas.height, colors: colors.size };
+    const dominant = Math.max(0, ...colors.values());
+    return { width: canvas.width, height: canvas.height, colors: colors.size, nonBackground: sampled - dominant, checksum };
   }, dataUrl);
 }
 
@@ -153,27 +196,36 @@ test("keeps one continuous video across all three screens", async ({ page }) => 
   const handle = await video.elementHandle();
   await video.evaluate((node: HTMLVideoElement) => {
     node.currentTime = 2;
-    node.pause();
-    node.playbackRate = 1.5;
+    node.playbackRate = 0.5;
+    return node.play();
   });
-  await expect.poll(() => video.evaluate((node: HTMLVideoElement) => node.currentTime)).toBeCloseTo(2, 1);
-  const before = await video.evaluate((node: HTMLVideoElement) => ({ time: node.currentTime, paused: node.paused }));
+  await expect.poll(() => video.evaluate((node: HTMLVideoElement) => node.currentTime)).toBeGreaterThan(2.05);
+  const before = await video.evaluate((node: HTMLVideoElement) => ({ time: node.currentTime, paused: node.paused, duration: node.duration }));
 
   await navigateByWheel(page, "live");
   await expect(page.getByRole("region", { name: "实时解析" })).toBeInViewport();
   expect(await page.evaluate((original) => document.querySelector("video") === original, handle)).toBe(true);
   const live = await video.evaluate((node: HTMLVideoElement) => ({ time: node.currentTime, paused: node.paused, rate: node.playbackRate }));
-  expect(live.time).toBeCloseTo(before.time, 1);
-  expect(live.paused).toBe(before.paused);
-  expect(live.rate).toBe(1.5);
+  const playingDelta = live.time >= before.time ? live.time - before.time : before.duration - before.time + live.time;
+  expect(playingDelta).toBeGreaterThan(0.05);
+  expect(live.paused).toBe(false);
+  expect(live.rate).toBe(0.5);
+
+  await video.evaluate((node: HTMLVideoElement) => {
+    node.currentTime = 3;
+    node.pause();
+    node.playbackRate = 1.5;
+  });
+  await expect.poll(() => video.evaluate((node: HTMLVideoElement) => node.currentTime)).toBeCloseTo(3, 1);
+  const paused = await video.evaluate((node: HTMLVideoElement) => ({ time: node.currentTime, paused: node.paused }));
 
   await navigateByWheel(page, "diagnosis");
   await expect(page.getByRole("region", { name: "全域诊断" })).toBeInViewport();
   await expect(page.locator("video")).toHaveCount(1);
   expect(await page.evaluate((original) => document.querySelector("video") === original, handle)).toBe(true);
   const diagnosis = await video.evaluate((node: HTMLVideoElement) => ({ time: node.currentTime, paused: node.paused, rate: node.playbackRate }));
-  expect(diagnosis.time).toBeCloseTo(live.time, 1);
-  expect(diagnosis.paused).toBe(before.paused);
+  expect(diagnosis.time).toBeCloseTo(paused.time, 1);
+  expect(diagnosis.paused).toBe(true);
   expect(diagnosis.rate).toBe(1.5);
 });
 
@@ -183,13 +235,15 @@ test("switches ten Chinese scenes in place and keeps live and diagnosis screens 
   const video = page.getByTestId("persistent-scene-video");
   const originalVideo = await video.elementHandle();
   const entryScroll = await root.evaluate((node) => node.scrollTop);
+  await video.evaluate((node: HTMLVideoElement) => { node.playbackRate = 0.125; });
   const oldPoster = await video.screenshot();
+  await armSceneResetProbe(video);
   await page.getByRole("button", { name: "工区左转跟车", exact: true }).click();
   await expect(video).toHaveAttribute("src", "/scenes/scene-0061/sample.mp4");
+  await expectSceneResetNearZero(video);
   await expect.poll(() => video.evaluate((node: HTMLVideoElement) => node.readyState)).toBeGreaterThanOrEqual(3);
   expect(await root.evaluate((node) => node.scrollTop)).toBe(entryScroll);
   expect(await page.evaluate((original) => document.querySelector("video") === original, originalVideo)).toBe(true);
-  expect(await video.evaluate((node: HTMLVideoElement) => node.currentTime)).toBeLessThan(2);
   expect(await video.evaluate((node: HTMLVideoElement) => node.paused)).toBe(false);
   expect((await video.screenshot()).equals(oldPoster)).toBe(false);
 
@@ -198,14 +252,13 @@ test("switches ten Chinese scenes in place and keeps live and diagnosis screens 
   expect(await page.locator("body").innerText()).not.toMatch(/scene-\d{4}/i);
 
   await navigateByWheel(page, "live");
-  await selectScene(page, "人车混流待转");
-  await expect(root).toHaveAttribute("data-active-screen", "live");
+  await switchSceneAndExpectPlayback(page, "人车混流待转", "/scenes/scene-0103/sample.mp4", "live", originalVideo);
   await navigateByWheel(page, "diagnosis");
-  await selectScene(page, "斑马线母婴穿越");
-  await expect(root).toHaveAttribute("data-active-screen", "diagnosis");
+  await switchSceneAndExpectPlayback(page, "斑马线母婴穿越", "/scenes/scene-0553/sample.mp4", "diagnosis", originalVideo);
 });
 
 test("keeps health and current-frame WebSocket diagnosis while completing the full report", async ({ page, request }) => {
+  test.setTimeout(300_000);
   const health = await request.get("http://127.0.0.1:8080/health");
   expect(health.ok()).toBe(true);
   expect(await health.json()).toMatchObject({ status: "ok" });
@@ -226,10 +279,35 @@ test("keeps health and current-frame WebSocket diagnosis while completing the fu
   await expect(frameDiagnosis).toBeEnabled({ timeout: 30_000 });
   await expect.poll(() => receivedFrames.some((frame) => frame.includes("riskLevel"))).toBe(true);
 
-  await waitForReport(page);
+  let releasePolling = () => undefined;
+  const pollingGate = new Promise<void>((resolve) => { releasePolling = resolve; });
+  let pollHeld = false;
+  await page.route(/\/api\/v1\/diagnoses\/[^/]+$/, async (route) => {
+    pollHeld = true;
+    await pollingGate;
+    await route.continue();
+  });
+  const createdResponse = page.waitForResponse((response) => (
+    response.request().method() === "POST" && response.url().endsWith("/api/v1/diagnoses")
+  ));
+  const generate = page.getByRole("button", { name: "生成全场景报告" });
+  await generate.click();
+  const created = await createdResponse;
+  expect(created.status()).toBe(202);
+  expect(await created.json()).toMatchObject({ stage: "queued", percent: 0 });
+  await expect.poll(() => pollHeld).toBe(true);
+  await expect(page.getByRole("button", { name: "报告生成中" })).toBeDisabled();
+  await expect(page.getByLabel("诊断进度")).toContainText("0%");
+  await expect(page.locator(".cockpit-diagnosis__stage")).toContainText("等待调度");
+  releasePolling();
+  await expect(page.getByLabel("诊断进度")).toContainText("已完成", { timeout: 60_000 });
   const report = page.getByRole("article", { name: "全场景诊断报告" });
+  await expect(report).toBeVisible();
+  await expect(report.getByText("本地确定性分析", { exact: true })).toBeVisible();
   for (const section of reportSections) {
-    await expect(report.getByRole("region", { name: section })).toBeAttached();
+    const sectionView = report.getByRole("region", { name: section });
+    await expect(sectionView).toBeAttached();
+    await expect.poll(async () => (await sectionView.innerText()).replace(section, "").trim().length).toBeGreaterThan(5);
   }
   const root = page.locator(".cockpit-experience");
   await expect.poll(() => root.evaluate((node) => node.scrollTop)).toBeGreaterThan(900);
@@ -256,7 +334,7 @@ test("keeps health and current-frame WebSocket diagnosis while completing the fu
 });
 
 test("passes desktop visual, pixel, and overlap QA at all required viewports", async ({ browser }) => {
-  test.setTimeout(600_000);
+  test.setTimeout(1_200_000);
   await mkdir(screenshotRoot, { recursive: true });
   for (const viewport of [
     { width: 1366, height: 768 },
@@ -273,20 +351,23 @@ test("passes desktop visual, pixel, and overlap QA at all required viewports", a
     await page.screenshot({ path: path.join(screenshotRoot, `${slug}-entry.png`), fullPage: false });
 
     const terrain = page.getByTestId("terrain-backdrop-canvas");
-    const terrainFirst = await terrain.screenshot();
-    await page.waitForTimeout(250);
-    const terrainSecond = await terrain.screenshot();
-    expect(terrainFirst.length).toBeGreaterThan(1_000);
-    expect(terrainSecond.equals(terrainFirst)).toBe(false);
+    const terrainFirst = await screenshotSignal(terrain);
+    expect(terrainFirst.colors).toBeGreaterThan(8);
+    expect(terrainFirst.nonBackground).toBeGreaterThan(100);
+    await expect.poll(async () => (await screenshotSignal(terrain)).checksum, {
+      timeout: 5_000,
+      intervals: [100, 200, 400],
+    }).not.toBe(terrainFirst.checksum);
 
     const video = page.getByTestId("persistent-scene-video");
     const firstFrame = await videoSignal(video);
-    await page.waitForTimeout(350);
-    const secondFrame = await videoSignal(video);
     expect(firstFrame.width).toBeGreaterThan(0);
     expect(firstFrame.height).toBeGreaterThan(0);
     expect(firstFrame.colors).toBeGreaterThan(8);
-    expect(secondFrame.checksum).not.toBe(firstFrame.checksum);
+    await expect.poll(async () => (await videoSignal(video)).checksum, {
+      timeout: 5_000,
+      intervals: [100, 200, 400],
+    }).not.toBe(firstFrame.checksum);
 
     await navigateByWheel(page, "live");
     const videoFrame = page.locator(".cockpit-live .cockpit-video-frame");

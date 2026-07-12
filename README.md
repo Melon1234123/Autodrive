@@ -39,15 +39,21 @@
 
 ```bash
 cd frontend
+npm install
+npx playwright install chromium
 npm test -- --run
 npm run build
-npm run test:e2e
 
 cd ..
 backend/.venv/bin/python -m pytest harness/tests tests -q
+
+# E2E 默认自行启动并回收 5173/8080，先停掉手动启动的 Demo
+./guandiao
+cd frontend
+npm run test:e2e
 ```
 
-`npm run test:e2e` 会在本机启动或复用 5173/8080 服务，验证三屏、十场景、WebSocket 当前帧诊断、异步报告和四组桌面视口。验收截图写入已忽略的 `.run/playwright/screenshots/`。
+fresh checkout 首次运行前需要执行 `npx playwright install chromium`。`npm run test:e2e` 默认不复用现有端口进程，而是启动并回收本次验收专用的 5173/8080 服务，确保测试当前代码。只有在确认手动服务就是当前工作树时，才可显式使用 `PW_REUSE_EXISTING=1 npm run test:e2e` 复用它们。套件验证三屏、十场景、WebSocket 当前帧诊断、异步报告和四组桌面视口；验收截图写入已忽略的 `.run/playwright/screenshots/`。
 
 ## 快速说明
 

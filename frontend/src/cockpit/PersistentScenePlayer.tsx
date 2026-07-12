@@ -22,6 +22,7 @@ export type PersistentScenePlayerProps = {
   src: string;
   activeScreen: CockpitScreen;
   slots: Record<CockpitScreen, RefObject<HTMLElement | null>>;
+  scrollRootRef?: RefObject<HTMLElement | null>;
   showDetections: boolean;
   objects: readonly CameraPerceptionObject[];
   videoRef?: RefObject<HTMLVideoElement | null>;
@@ -45,6 +46,18 @@ function captureFrame(video: HTMLVideoElement, canvas: HTMLCanvasElement | null)
 
 function revealVideo(canvas: HTMLCanvasElement | null) {
   if (canvas) canvas.hidden = true;
+}
+
+function resolvedSource(source: string) {
+  return new URL(source, document.baseURI).href;
+}
+
+function playWithoutUnhandledRejection(video: HTMLVideoElement) {
+  try {
+    void video.play().catch(() => undefined);
+  } catch {
+    // Some media implementations can reject synchronously before returning a promise.
+  }
 }
 
 function geometryStyle(geometry: VideoGeometry | null): CSSProperties {
@@ -95,6 +108,7 @@ export function PersistentScenePlayer({
   src,
   activeScreen,
   slots,
+  scrollRootRef,
   showDetections,
   objects,
   videoRef: externalVideoRef,
@@ -104,19 +118,34 @@ export function PersistentScenePlayer({
   const videoRef = externalVideoRef ?? ownedVideoRef;
   const freezeRef = useRef<HTMLCanvasElement>(null);
   const previousSceneRef = useRef(sceneKey);
+  const loadGenerationRef = useRef(0);
   const initialSourceRef = useRef(src);
-  const geometry = useVideoGeometry(slots[activeScreen]);
+  const geometry = useVideoGeometry(slots[activeScreen], scrollRootRef);
 
+  // sceneKey is the sole source-transition trigger; src-only renders must leave media state intact.
   useLayoutEffect(() => {
     const video = videoRef.current;
     if (previousSceneRef.current === sceneKey || !video) return;
 
     captureFrame(video, freezeRef.current);
     previousSceneRef.current = sceneKey;
+    const generation = loadGenerationRef.current + 1;
+    loadGenerationRef.current = generation;
+    const expectedSource = resolvedSource(src);
+    const handleCanPlay = () => {
+      const completedSource = resolvedSource(video.currentSrc || video.src);
+      if (loadGenerationRef.current !== generation || completedSource !== expectedSource) return;
+      video.removeEventListener("canplay", handleCanPlay);
+      revealVideo(freezeRef.current);
+      playWithoutUnhandledRejection(video);
+    };
+
+    video.addEventListener("canplay", handleCanPlay);
     video.src = src;
     video.currentTime = 0;
     video.load();
-  }, [sceneKey, src, videoRef]);
+    return () => video.removeEventListener("canplay", handleCanPlay);
+  }, [sceneKey]);
 
   return (
     <div
@@ -129,10 +158,10 @@ export function PersistentScenePlayer({
         data-testid="persistent-scene-video"
         src={initialSourceRef.current}
         muted
+        autoPlay
         playsInline
         loop
         preload="auto"
-        onCanPlay={() => revealVideo(freezeRef.current)}
         onTimeUpdate={(event) => onTimeChange?.(event.currentTarget.currentTime)}
         style={{ width: "100%", height: "100%", display: "block", objectFit: "cover" }}
       />

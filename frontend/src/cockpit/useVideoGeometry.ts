@@ -2,8 +2,12 @@ import { useLayoutEffect, useState } from "react";
 import type { RefObject } from "react";
 import type { VideoGeometry } from "./types";
 
-export function useVideoGeometry(activeSlot: RefObject<HTMLElement | null>) {
+export function useVideoGeometry(
+  activeSlot: RefObject<HTMLElement | null>,
+  scrollRootRef?: RefObject<HTMLElement | null>,
+) {
   const [geometry, setGeometry] = useState<VideoGeometry | null>(null);
+  const scrollRoot = scrollRootRef?.current ?? null;
 
   useLayoutEffect(() => {
     const slot = activeSlot.current;
@@ -21,16 +25,17 @@ export function useVideoGeometry(activeSlot: RefObject<HTMLElement | null>) {
 
     update();
     const observer = new ResizeObserver(update);
+    const scrollTarget = scrollRootRef?.current ?? scrollRoot ?? window;
     if (slot) observer.observe(slot);
-    window.addEventListener("scroll", update, { passive: true });
+    scrollTarget.addEventListener("scroll", update, { passive: true });
     window.addEventListener("resize", update);
 
     return () => {
       observer.disconnect();
-      window.removeEventListener("scroll", update);
+      scrollTarget.removeEventListener("scroll", update);
       window.removeEventListener("resize", update);
     };
-  }, [activeSlot]);
+  }, [activeSlot, scrollRoot, scrollRootRef]);
 
   return geometry;
 }

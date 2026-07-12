@@ -63,8 +63,18 @@ const motionMocks = vi.hoisted(() => {
     lenisRaf: vi.fn(),
     lenisScrollTo: vi.fn(),
     lenisDestroy: vi.fn(),
+    lenisIsLocked: false,
     unsubscribe: vi.fn(),
+    snapConstruct: vi.fn(),
+    snapAddElements: vi.fn(),
+    snapStart: vi.fn(),
+    snapStop: vi.fn(),
+    snapGoTo: vi.fn(),
+    snapDestroy: vi.fn(),
+    snapResize: vi.fn(),
+    snapOptions: null as Record<string, unknown> | null,
     throwOnContext: false,
+    throwOnSnap: false,
     throwOnTween: false,
   };
 });
@@ -96,12 +106,41 @@ vi.mock("gsap/ScrollTrigger", () => ({
 vi.mock("lenis", () => ({
   default: class LenisMock {
     constructor(options: unknown) { motionMocks.lenisConstruct(options); }
+    get isLocked() { return motionMocks.lenisIsLocked; }
     on(event: string, callback: unknown) { motionMocks.lenisOn(event, callback); return motionMocks.unsubscribe; }
     stop() { motionMocks.lenisStop(); }
     start() { motionMocks.lenisStart(); }
     raf(time: number) { motionMocks.lenisRaf(time); }
-    scrollTo(target: HTMLElement, options: unknown) { motionMocks.lenisScrollTo(target, options); }
+    scrollTo(target: HTMLElement, options: unknown) {
+      motionMocks.lenisScrollTo(target, options);
+      if ((options as { lock?: boolean }).lock) motionMocks.lenisIsLocked = true;
+    }
     destroy() { motionMocks.lenisDestroy(); }
+  },
+}));
+
+vi.mock("lenis/snap", () => ({
+  default: class SnapMock {
+    constructor(lenis: unknown, options: Record<string, unknown>) {
+      if (motionMocks.throwOnSnap) throw new Error("snap init failed");
+      motionMocks.snapOptions = options;
+      motionMocks.snapConstruct(lenis, options);
+    }
+    addElements(elements: HTMLElement[], options: unknown) {
+      motionMocks.snapAddElements(elements, options);
+      return vi.fn();
+    }
+    start() { motionMocks.snapStart(); }
+    stop() { motionMocks.snapStop(); }
+    goTo(index: number) {
+      motionMocks.snapGoTo(index);
+      (motionMocks.snapOptions?.onSnapStart as ((item: unknown) => void) | undefined)?.({
+        index,
+        value: index * 900,
+      });
+    }
+    resize() { motionMocks.snapResize(); }
+    destroy() { motionMocks.snapDestroy(); }
   },
 }));
 
@@ -192,10 +231,18 @@ function Harness({
           <div data-motion-line />
           <p data-motion-copy />
         </section>
-        <section id="product" />
+        <section data-motion-section id="origin" />
+        <section data-motion-section id="route" />
+        <section data-motion-section id="product"><span id="product-detail" /></section>
+        <footer data-motion-section id="contact" />
       </div>
+      <div id="legal-target" />
       <a href="#product">产品体系</a>
+      <a href="#product-detail">产品详情</a>
+      <a href="#legal-target">合法目标</a>
       <a href="mailto:test@example.com">联系</a>
+      <input aria-label="导航输入" />
+      <button type="button">空格按钮</button>
     </main>
   );
 }
@@ -226,7 +273,10 @@ beforeEach(() => {
   motionMocks.timelineOptions.length = 0;
   motionMocks.timelineTargets.length = 0;
   motionMocks.timelineFromToCalls.length = 0;
+  motionMocks.lenisIsLocked = false;
+  motionMocks.snapOptions = null;
   motionMocks.throwOnContext = false;
+  motionMocks.throwOnSnap = false;
   motionMocks.throwOnTween = false;
   vi.stubGlobal("requestAnimationFrame", vi.fn(() => 17));
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
@@ -244,6 +294,8 @@ it("skips all motion under reduced motion and resolves opening once in StrictMod
   const view = render(<StrictMode><Harness onOpeningComplete={complete} /></StrictMode>);
 
   expect(motionMocks.lenisConstruct).not.toHaveBeenCalled();
+  expect(motionMocks.snapConstruct).not.toHaveBeenCalled();
+  expect(motionMocks.snapDestroy).not.toHaveBeenCalled();
   expect(motionMocks.gsapContext).not.toHaveBeenCalled();
   expect(view.container.querySelector("[data-motion-opening]")).toHaveAttribute("hidden");
   expect(complete).toHaveBeenCalledTimes(1);
@@ -255,6 +307,8 @@ it("also skips motion outside the desktop fine-pointer gate", () => {
   render(<Harness onOpeningComplete={complete} />);
 
   expect(motionMocks.lenisConstruct).not.toHaveBeenCalled();
+  expect(motionMocks.snapConstruct).not.toHaveBeenCalled();
+  expect(motionMocks.snapDestroy).not.toHaveBeenCalled();
   expect(motionMocks.gsapContext).not.toHaveBeenCalled();
   expect(complete).toHaveBeenCalledTimes(1);
 });
@@ -267,6 +321,8 @@ it("uses the opening preference captured on mount", () => {
   view.rerender(<Harness playOpening onOpeningComplete={complete} />);
 
   expect(motionMocks.lenisStop).not.toHaveBeenCalled();
+  expect(motionMocks.snapStart).toHaveBeenCalledTimes(1);
+  expect(motionMocks.snapStop).not.toHaveBeenCalled();
   expect(openingCompletions()).toHaveLength(0);
   expect(complete).not.toHaveBeenCalled();
 });
@@ -278,7 +334,12 @@ it("finishes the opening fallback when the optional hero media is absent", () =>
   const root = view.container.querySelector("main") as HTMLElement;
 
   expect(motionMocks.lenisStop).toHaveBeenCalledTimes(1);
+  expect(motionMocks.snapStop).toHaveBeenCalledTimes(1);
+  expect(motionMocks.snapStart).toHaveBeenCalledTimes(1);
   expect(motionMocks.lenisStart).toHaveBeenCalledTimes(1);
+  expect(motionMocks.snapStart.mock.invocationCallOrder[0]).toBeLessThan(
+    motionMocks.lenisStart.mock.invocationCallOrder[0],
+  );
   expect(root).not.toHaveClass("showcase-opening-active");
   expect(root.querySelector("[data-motion-opening]")).toHaveAttribute("hidden");
   expect(complete).toHaveBeenCalledTimes(1);
@@ -302,6 +363,7 @@ it.each([
 
   expect(motionMocks.contextRevert).toHaveBeenCalledTimes(1);
   expect(motionMocks.unsubscribe).toHaveBeenCalledTimes(1);
+  expect(motionMocks.snapDestroy).toHaveBeenCalledTimes(1);
   expect(motionMocks.lenisDestroy).toHaveBeenCalledTimes(1);
   expect(root).not.toHaveClass("showcase-motion-active", "showcase-opening-active");
   expect(root.querySelector("[data-motion-opening]")).toHaveAttribute("hidden");
@@ -316,6 +378,7 @@ it.each([
   act(() => media[queryName].setMatches(!disabledValue));
 
   expect(motionMocks.lenisConstruct).toHaveBeenCalledTimes(2);
+  expect(motionMocks.snapConstruct).toHaveBeenCalledTimes(2);
   expect(openingCompletions()).toHaveLength(1);
   expect(root).toHaveClass("showcase-motion-active");
   expect(root).not.toHaveClass("showcase-opening-active");
@@ -391,6 +454,9 @@ it("creates one root-scoped synchronized runtime, handles anchors, and cleans up
   const root = view.container.querySelector("main") as HTMLElement;
   const content = root.querySelector("[data-lenis-content]");
   const staggerItem = root.querySelector("[data-motion-stagger-item]");
+  const pages = Array.from(content!.querySelectorAll<HTMLElement>(
+    ":scope > .showcase-hero, :scope > [data-motion-section]",
+  ));
 
   expect(motionMocks.lenisConstruct).toHaveBeenCalledTimes(1);
   expect(motionMocks.lenisConstruct).toHaveBeenCalledWith(expect.objectContaining({
@@ -398,10 +464,26 @@ it("creates one root-scoped synchronized runtime, handles anchors, and cleans up
     content,
     autoRaf: false,
   }));
+  const lenisOptions = motionMocks.lenisConstruct.mock.calls[0][0] as Record<string, unknown>;
+  expect(motionMocks.snapConstruct).toHaveBeenCalledTimes(1);
+  expect(motionMocks.snapConstruct).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+    type: "lock",
+    duration: 1.05,
+    debounce: 90,
+    easing: expect.any(Function),
+  }));
+  expect(motionMocks.snapOptions?.easing).toBe(lenisOptions.easing);
+  expect(motionMocks.snapAddElements).toHaveBeenCalledWith(expect.arrayContaining([
+    root.querySelector(".showcase-hero"),
+    root.querySelector("#contact"),
+  ]), expect.objectContaining({ align: "start", ignoreTransform: true }));
+  expect(motionMocks.snapAddElements.mock.calls[0][0]).toHaveLength(7);
+  expect(motionMocks.snapAddElements.mock.calls[0][0]).toEqual(pages);
   expect(motionMocks.lenisOn).toHaveBeenCalledWith("scroll", motionMocks.scrollUpdate);
   expect(motionMocks.gsapContext).toHaveBeenCalledWith(expect.any(Function), root);
   expect(motionMocks.timelineTargets.some((targets) => Array.isArray(targets) && targets.includes(staggerItem))).toBe(true);
   expect(motionMocks.lenisStop).toHaveBeenCalledTimes(1);
+  expect(motionMocks.snapStop).toHaveBeenCalledTimes(1);
   expect(motionMocks.tickerAdd).toHaveBeenCalledTimes(1);
 
   const ticker = motionMocks.tickerAdd.mock.calls[0][0] as (time: number) => void;
@@ -423,19 +505,25 @@ it("creates one root-scoped synchronized runtime, handles anchors, and cleans up
 
   expect(openingCompletions()).toHaveLength(1);
   openingCompletions()[0]();
+  expect(motionMocks.snapStart).toHaveBeenCalledTimes(1);
   expect(motionMocks.lenisStart).toHaveBeenCalledTimes(1);
+  expect(motionMocks.snapStart.mock.invocationCallOrder[0]).toBeLessThan(
+    motionMocks.lenisStart.mock.invocationCallOrder[0],
+  );
   expect(complete).toHaveBeenCalledTimes(1);
 
   fireEvent.click(screen.getByRole("link", { name: "产品体系" }));
-  expect(motionMocks.lenisScrollTo).toHaveBeenCalledWith(
-    root.querySelector("#product"),
-    expect.any(Object),
-  );
+  expect(motionMocks.snapGoTo).toHaveBeenCalledWith(5);
+  expect(motionMocks.lenisScrollTo).not.toHaveBeenCalled();
   expect(window.location.hash).toBe("#product");
 
   view.unmount();
   expect(motionMocks.tickerRemove).toHaveBeenCalledWith(ticker);
   expect(motionMocks.unsubscribe).toHaveBeenCalledTimes(1);
+  expect(motionMocks.snapDestroy).toHaveBeenCalledTimes(1);
+  expect(motionMocks.snapDestroy.mock.invocationCallOrder[0]).toBeLessThan(
+    motionMocks.lenisDestroy.mock.invocationCallOrder[0],
+  );
   expect(motionMocks.lenisDestroy).toHaveBeenCalledTimes(1);
   expect(motionMocks.contextRevert).toHaveBeenCalledTimes(1);
   const queries = vi.mocked(window.matchMedia).mock.results.map((result) => result.value);
@@ -443,6 +531,140 @@ it("creates one root-scoped synchronized runtime, handles anchors, and cleans up
   expect(motionMocks.gsapDefaults).not.toHaveBeenCalled();
   expect(motionMocks.gsapKillTweensOf).not.toHaveBeenCalled();
   expect(motionMocks.scrollKillAll).not.toHaveBeenCalled();
+});
+
+it("routes registered and contained anchors through Snap while retaining the legal Lenis fallback", () => {
+  installMatchMedia({ reduced: false, desktop: true });
+  const view = render(<Harness playOpening={false} />);
+  const root = view.container.querySelector("main") as HTMLElement;
+  const completeSnap = motionMocks.snapOptions?.onSnapComplete as ((item: unknown) => void);
+
+  expect(fireEvent.click(screen.getByRole("link", { name: "产品体系" }))).toBe(false);
+  expect(motionMocks.snapGoTo).toHaveBeenLastCalledWith(5);
+  expect(motionMocks.lenisScrollTo).not.toHaveBeenCalled();
+  expect(window.location.hash).toBe("#product");
+
+  motionMocks.snapGoTo.mockClear();
+  expect(fireEvent.click(screen.getByRole("link", { name: "合法目标" }))).toBe(false);
+  expect(motionMocks.lenisScrollTo).not.toHaveBeenCalled();
+  expect(window.location.hash).toBe("#product");
+
+  expect(fireEvent.click(screen.getByRole("link", { name: "产品详情" }))).toBe(false);
+  expect(motionMocks.snapGoTo).not.toHaveBeenCalled();
+  expect(motionMocks.lenisScrollTo).not.toHaveBeenCalled();
+  expect(window.location.hash).toBe("#product");
+
+  completeSnap({ index: 5, value: 4500 });
+  expect(fireEvent.click(screen.getByRole("link", { name: "产品详情" }))).toBe(false);
+  expect(motionMocks.snapGoTo).toHaveBeenLastCalledWith(5);
+  expect(window.location.hash).toBe("#product-detail");
+
+  completeSnap({ index: 5, value: 4500 });
+  expect(fireEvent.click(screen.getByRole("link", { name: "合法目标" }))).toBe(false);
+  expect(motionMocks.lenisScrollTo).toHaveBeenCalledWith(
+    root.querySelector("#legal-target"),
+    { duration: 1.05, lock: true },
+  );
+  expect(window.location.hash).toBe("#legal-target");
+
+  motionMocks.snapGoTo.mockClear();
+  expect(fireEvent.click(screen.getByRole("link", { name: "产品体系" }))).toBe(false);
+  expect(motionMocks.snapGoTo).not.toHaveBeenCalled();
+  expect(window.location.hash).toBe("#legal-target");
+
+  motionMocks.lenisIsLocked = false;
+  expect(fireEvent.click(screen.getByRole("link", { name: "产品体系" }))).toBe(false);
+  expect(motionMocks.snapGoTo).toHaveBeenCalledWith(5);
+  expect(window.location.hash).toBe("#product");
+});
+
+it("holds direct page commands until the stopped opening runtime has restarted", () => {
+  installMatchMedia({ reduced: false, desktop: true });
+  render(<Harness />);
+
+  expect(fireEvent.click(screen.getByRole("link", { name: "产品体系" }))).toBe(false);
+  expect(motionMocks.snapGoTo).not.toHaveBeenCalled();
+  expect(window.location.hash).toBe("");
+  expect(fireEvent.keyDown(window, { key: "PageDown" })).toBe(true);
+  expect(motionMocks.snapGoTo).not.toHaveBeenCalled();
+
+  openingCompletions()[0]();
+  expect(fireEvent.click(screen.getByRole("link", { name: "产品体系" }))).toBe(false);
+  expect(motionMocks.snapGoTo).toHaveBeenCalledWith(5);
+  expect(window.location.hash).toBe("#product");
+});
+
+it("locks page keys until Snap completes and leaves rejected keyboard input untouched", () => {
+  installMatchMedia({ reduced: false, desktop: true });
+  const view = render(<Harness playOpening={false} />);
+  const root = view.container.querySelector("main") as HTMLElement;
+  const content = root.querySelector("[data-lenis-content]") as HTMLElement;
+  const pages = Array.from(content.querySelectorAll<HTMLElement>(
+    ":scope > .showcase-hero, :scope > [data-motion-section]",
+  ));
+  pages.forEach((page, index) => {
+    Object.defineProperty(page, "offsetTop", { configurable: true, value: index * 900 });
+  });
+  const completeSnap = motionMocks.snapOptions?.onSnapComplete as ((item: unknown) => void);
+  motionMocks.snapGoTo.mockClear();
+
+  root.scrollTop = 0;
+  expect(fireEvent.keyDown(window, { key: "PageUp" })).toBe(true);
+  expect(motionMocks.snapGoTo).not.toHaveBeenCalled();
+
+  expect(fireEvent.keyDown(window, { key: "PageDown" })).toBe(false);
+  expect(motionMocks.snapGoTo).toHaveBeenLastCalledWith(1);
+  expect(fireEvent.keyDown(window, { key: "PageDown" })).toBe(true);
+  expect(motionMocks.snapGoTo).toHaveBeenCalledTimes(1);
+
+  completeSnap({ index: 1, value: 900 });
+  root.scrollTop = 900;
+  expect(fireEvent.keyDown(window, { key: "PageUp" })).toBe(false);
+  expect(motionMocks.snapGoTo).toHaveBeenLastCalledWith(0);
+  completeSnap({ index: 0, value: 0 });
+
+  motionMocks.snapGoTo.mockClear();
+  root.scrollTop = 0;
+  expect(fireEvent.keyDown(window, { key: "PageDown", repeat: true })).toBe(true);
+  expect(fireEvent.keyDown(window, { key: "PageDown", ctrlKey: true })).toBe(true);
+  expect(fireEvent.keyDown(screen.getByLabelText("导航输入"), { key: "PageDown" })).toBe(true);
+  expect(fireEvent.keyDown(screen.getByRole("button", { name: "空格按钮" }), { key: " " })).toBe(true);
+  expect(motionMocks.snapGoTo).not.toHaveBeenCalled();
+
+  root.scrollTop = 5400;
+  expect(fireEvent.keyDown(window, { key: "PageDown" })).toBe(true);
+  expect(motionMocks.snapGoTo).not.toHaveBeenCalled();
+
+  root.scrollTop = 1800;
+  expect(fireEvent.keyDown(window, { key: "End" })).toBe(false);
+  expect(motionMocks.snapGoTo).toHaveBeenLastCalledWith(6);
+  completeSnap({ index: 6, value: 5400 });
+  root.scrollTop = 5400;
+  expect(fireEvent.keyDown(window, { key: "Home" })).toBe(false);
+  expect(motionMocks.snapGoTo).toHaveBeenLastCalledWith(0);
+
+  motionMocks.snapGoTo.mockClear();
+  view.unmount();
+  expect(fireEvent.keyDown(window, { key: "PageDown" })).toBe(true);
+  expect(motionMocks.snapGoTo).not.toHaveBeenCalled();
+});
+
+it("resizes Snap before refreshing ScrollTrigger in the scheduled frame", () => {
+  installMatchMedia({ reduced: false, desktop: true });
+  let refresh: FrameRequestCallback | undefined;
+  vi.mocked(window.requestAnimationFrame).mockImplementation((callback) => {
+    refresh = callback;
+    return 17;
+  });
+  render(<Harness playOpening={false} />);
+
+  act(() => refresh?.(0));
+
+  expect(motionMocks.snapResize).toHaveBeenCalledTimes(1);
+  expect(motionMocks.scrollRefresh).toHaveBeenCalledTimes(1);
+  expect(motionMocks.snapResize.mock.invocationCallOrder[0]).toBeLessThan(
+    motionMocks.scrollRefresh.mock.invocationCallOrder[0],
+  );
 });
 
 it("resolves the opening callback at most once across StrictMode replay", () => {
@@ -453,6 +675,34 @@ it("resolves the opening callback at most once across StrictMode replay", () => 
   const completions = openingCompletions();
   expect(completions.length).toBeGreaterThan(0);
   completions.forEach((finish) => finish());
+  expect(complete).toHaveBeenCalledTimes(1);
+});
+
+it("falls back visibly and tears down Lenis when Snap initialization throws", () => {
+  installMatchMedia({ reduced: false, desktop: true });
+  motionMocks.throwOnSnap = true;
+  const complete = vi.fn();
+  let view: ReturnType<typeof render> | undefined;
+
+  expect(() => {
+    view = render(<Harness onOpeningComplete={complete} seedHiddenStyles />);
+  }).not.toThrow();
+
+  const root = view!.container.querySelector("main") as HTMLElement;
+  const copy = root.querySelector<HTMLElement>("[data-motion-copy]")!;
+  expect(motionMocks.lenisConstruct).toHaveBeenCalledTimes(1);
+  expect(motionMocks.snapConstruct).not.toHaveBeenCalled();
+  expect(motionMocks.snapDestroy).not.toHaveBeenCalled();
+  expect(motionMocks.lenisDestroy).toHaveBeenCalledTimes(1);
+  expect(motionMocks.gsapContext).not.toHaveBeenCalled();
+  expect(root).not.toHaveClass("showcase-motion-active", "showcase-opening-active");
+  expect(root.querySelector("[data-motion-opening]")).toHaveAttribute("hidden");
+  expect(copy.style.opacity).toBe("");
+  expect(copy.style.visibility).toBe("");
+  expect(copy.style.transform).toBe("");
+  expect(copy.style.clipPath).toBe("");
+  expect(fireEvent.keyDown(window, { key: "PageDown" })).toBe(true);
+  expect(motionMocks.snapGoTo).not.toHaveBeenCalled();
   expect(complete).toHaveBeenCalledTimes(1);
 });
 
@@ -475,12 +725,15 @@ it("falls back visibly and releases only its resources when initialization throw
   expect(fallbackCopy.style.clipPath).toBe("");
   expect(fallbackStaggerItem.style.clipPath).toBe("");
   expect(fallbackStaggerItem.style.willChange).toBe("");
+  expect(motionMocks.snapDestroy).toHaveBeenCalledTimes(1);
   expect(motionMocks.lenisDestroy).toHaveBeenCalled();
   expect(motionMocks.tickerRemove).toHaveBeenCalled();
   expect(motionMocks.unsubscribe).toHaveBeenCalled();
   expect(motionMocks.gsapDefaults).not.toHaveBeenCalled();
   expect(motionMocks.gsapKillTweensOf).not.toHaveBeenCalled();
   expect(motionMocks.scrollKillAll).not.toHaveBeenCalled();
+  expect(fireEvent.keyDown(window, { key: "PageDown" })).toBe(true);
+  expect(motionMocks.snapGoTo).not.toHaveBeenCalled();
   expect(complete).toHaveBeenCalledTimes(1);
 });
 
@@ -499,6 +752,7 @@ it("reverts its scoped context when a tween throws midway through initialization
   expect(motionMocks.contextRevert).toHaveBeenCalledTimes(1);
   expect(motionMocks.tickerRemove).toHaveBeenCalledTimes(1);
   expect(motionMocks.unsubscribe).toHaveBeenCalledTimes(1);
+  expect(motionMocks.snapDestroy).toHaveBeenCalledTimes(1);
   expect(motionMocks.lenisDestroy).toHaveBeenCalledTimes(1);
   expect(root).not.toHaveClass("showcase-motion-active", "showcase-opening-active");
   expect(root.querySelector("[data-motion-opening]")).toHaveAttribute("hidden");

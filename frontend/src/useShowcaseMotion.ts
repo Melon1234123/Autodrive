@@ -1,11 +1,14 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
 import Lenis from "lenis";
+import Snap from "lenis/snap";
 import "lenis/dist/lenis.css";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import {
   DESKTOP_SHOWCASE_MOTION_QUERY,
   resolveShowcaseAnchor,
+  resolveShowcasePageCommand,
+  resolveShowcasePageDestination,
   shouldEnableShowcaseMotion,
 } from "./showcase-motion-policy";
 
@@ -79,12 +82,29 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
       }
 
       const shouldPlayOpening = playOnMountRef.current && !openingResolvedRef.current;
+      const pages = Array.from(content.querySelectorAll<HTMLElement>(
+        ":scope > .showcase-hero, :scope > [data-motion-section]",
+      ));
+      const easing = (time: number) => Math.min(1, 1.001 - Math.pow(2, -10 * time));
       let context: gsap.Context | null = null;
       let lenis: Lenis | null = null;
+      let snap: Snap | null = null;
+      let pageNavigationLocked = shouldPlayOpening;
       let unsubscribeScroll: (() => void) | null = null;
       let refreshFrame = 0;
       let ticker: ((time: number) => void) | null = null;
       let runtimeActive = true;
+
+      const currentPageIndex = () => pages.reduce((best, page, index) => (
+        Math.abs(page.offsetTop - root.scrollTop) < Math.abs(pages[best].offsetTop - root.scrollTop) ? index : best
+      ), 0);
+
+      const goToPage = (index: number) => {
+        if (!snap || lenis?.isLocked || pageNavigationLocked || index < 0 || index >= pages.length) return false;
+        if (index === currentPageIndex()) return true;
+        snap.goTo(index);
+        return true;
+      };
 
       const handleAnchorClick = (event: MouseEvent) => {
         if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -93,14 +113,30 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
         const target = resolveShowcaseAnchor(root, link.getAttribute("href") ?? "");
         if (!target) return;
         event.preventDefault();
-        lenis?.scrollTo(target, { duration: 1.15, lock: false });
+        const pageIndex = pages.findIndex((page) => page === target || page.contains(target));
+        if (pageIndex >= 0) {
+          if (goToPage(pageIndex)) window.history.pushState(null, "", link.hash);
+          return;
+        }
+        if (!lenis || lenis.isLocked || pageNavigationLocked) return;
+        lenis.scrollTo(target, { duration: 1.05, lock: true });
         window.history.pushState(null, "", link.hash);
+      };
+
+      const handlePageKey = (event: KeyboardEvent) => {
+        const command = resolveShowcasePageCommand(event, event.target);
+        if (!command) return;
+        const destination = resolveShowcasePageDestination(command, currentPageIndex(), pages.length);
+        if (destination === null || !goToPage(destination)) return;
+        event.preventDefault();
       };
 
       const finishOpening = () => {
         if (!runtimeActive) return;
         opening?.setAttribute("hidden", "");
         root.classList.remove("showcase-opening-active");
+        pageNavigationLocked = false;
+        snap?.start();
         lenis?.start();
         resolveOpening();
       };
@@ -110,8 +146,11 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
         runtimeActive = false;
         window.cancelAnimationFrame(refreshFrame);
         root.removeEventListener("click", handleAnchorClick);
+        window.removeEventListener("keydown", handlePageKey);
         unsubscribeScroll?.();
         if (ticker) gsap.ticker.remove(ticker);
+        snap?.destroy();
+        snap = null;
         lenis?.stop();
         lenis?.destroy();
         context?.revert();
@@ -125,18 +164,31 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
           content,
           autoRaf: false,
           duration: 1.32,
-          easing: (time) => Math.min(1, 1.001 - Math.pow(2, -10 * time)),
+          easing,
           smoothWheel: true,
           syncTouch: false,
           overscroll: true,
         });
+        snap = new Snap(lenis, {
+          type: "lock",
+          duration: 1.05,
+          debounce: 90,
+          easing,
+          onSnapStart: () => { pageNavigationLocked = true; },
+          onSnapComplete: () => { pageNavigationLocked = false; },
+        });
+        snap.addElements(pages, { align: "start", ignoreTransform: true });
         unsubscribeScroll = lenis.on("scroll", ScrollTrigger.update);
         ticker = (time) => lenis?.raf(time * 1000);
         gsap.ticker.add(ticker);
         root.addEventListener("click", handleAnchorClick);
+        window.addEventListener("keydown", handlePageKey);
         if (shouldPlayOpening) {
           root.classList.add("showcase-opening-active");
+          snap.stop();
           lenis.stop();
+        } else {
+          snap.start();
         }
 
         const initializeScopedMotion = () => {
@@ -220,7 +272,10 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
         }, root);
         if (contextInitializationFailed) throw contextInitializationError;
 
-        refreshFrame = window.requestAnimationFrame(() => ScrollTrigger.refresh());
+        refreshFrame = window.requestAnimationFrame(() => {
+          snap?.resize();
+          ScrollTrigger.refresh();
+        });
         return dispose;
       } catch {
         dispose();

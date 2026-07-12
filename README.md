@@ -9,6 +9,46 @@
 - [nuScenes 公开数据复现指南](docs/nuscenes-data-guide.md)
 - [Foxglove + MCAP 实景演示指南](docs/foxglove-mcap-guide.md)
 
+## 三屏诊断驾驶舱
+
+从官网首屏点击“进入效果展示”后，驾驶舱按纵向三屏组织完整证据链：
+
+1. **场景入口**：选择数据场景并预览真实前视视频。
+2. **实时解析**：在同一时间轴上同步视频检测框、LiDAR 点云、地图轨迹、车辆状态和历史风险。
+3. **全域诊断**：支持 WebSocket 当前帧诊断，也支持异步全场景报告。报告显示排队、特征提取、因果分析等进度，完成后自动展开；点击证据时间可回到同步视频帧。
+
+三屏共用同一个视频播放节点，滚轮或键盘切屏不会重置时间、播放状态或倍速。场景库包含十个中文场景：工区左转跟车、人车混流待转、斑马线母婴穿越、停车场行人横穿、繁忙路口公交博弈、城市路口侧向超车、停车区人车密集、夜间主干道施工、雨夜行人横穿和低照路口混行。
+
+全场景报告默认由本地确定性规则生成，无需 API Key；配置可用的模型后可进入模型增强模式。模型不可达时会自动回退到本地分析，不中断演示。
+
+## 启动与测试
+
+保持原有启动方式：
+
+```bash
+./dakai
+```
+
+前端地址为 `http://localhost:5173/`，后端健康检查为 `http://localhost:8080/health`。停止服务：
+
+```bash
+./guandiao
+```
+
+回归测试：
+
+```bash
+cd frontend
+npm test -- --run
+npm run build
+npm run test:e2e
+
+cd ..
+backend/.venv/bin/python -m pytest harness/tests tests -q
+```
+
+`npm run test:e2e` 会在本机启动或复用 5173/8080 服务，验证三屏、十场景、WebSocket 当前帧诊断、异步报告和四组桌面视口。验收截图写入已忽略的 `.run/playwright/screenshots/`。
+
 ## 快速说明
 
 当前 Demo 保持 `frontend/public/sample.mp4 + frontend/public/telemetry.json + FastAPI WebSocket`

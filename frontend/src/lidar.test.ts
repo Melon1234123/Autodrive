@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { decodePointCloud, findNearestLidarFrame, LidarFrameCache } from "./lidar";
+import {
+  decodePointCloud,
+  findNearestLidarFrame,
+  LidarFrameCache,
+  LidarRequestGate,
+  resolveLidarRequestCommit,
+} from "./lidar";
 
 describe("LiDAR data helpers", () => {
   it("selects the nearest lidar keyframe", () => {
@@ -43,5 +49,88 @@ describe("LiDAR data helpers", () => {
     expect(cache.get("frame-2")).toBeUndefined();
     expect(cache.get("frame-3")).toBeDefined();
     expect(fetchFrame).toHaveBeenCalledTimes(3);
+  });
+
+  it("deduplicates concurrent frame loads", async () => {
+    let resolveFetch!: (response: Response) => void;
+    const fetchFrame = vi.fn(() => new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    }));
+    const cache = new LidarFrameCache(6, fetchFrame as unknown as typeof fetch);
+
+    const first = cache.load("same.bin");
+    const second = cache.load("same.bin");
+
+    expect(fetchFrame).toHaveBeenCalledTimes(1);
+    resolveFetch(new Response(new Float32Array([1, 2, 3, 0.5]).buffer));
+    const [firstCloud, secondCloud] = await Promise.all([first, second]);
+    expect(firstCloud).toBe(secondCloud);
+  });
+
+  it("allows retry after an in-flight load fails", async () => {
+    const fetchFrame = vi.fn()
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValueOnce(new Response(new Float32Array([1, 0, 0, 1]).buffer));
+    const cache = new LidarFrameCache(6, fetchFrame as unknown as typeof fetch);
+
+    await expect(cache.load("retry.bin")).rejects.toThrow("network");
+    await expect(cache.load("retry.bin")).resolves.toBeInstanceOf(Float32Array);
+    expect(fetchFrame).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts completed requests in issue order without allowing regression", () => {
+    const gate = new LidarRequestGate();
+    gate.reset();
+    const first = gate.issue();
+    const second = gate.issue();
+
+    expect(gate.accept(first)).toBe(true);
+    expect(gate.accept(second)).toBe(true);
+    expect(gate.accept(first)).toBe(false);
+
+    const oldGeneration = gate.issue();
+    gate.reset();
+    expect(gate.accept(oldGeneration)).toBe(false);
+  });
+
+  it("does not let a newer failed request suppress an older successful completion", () => {
+    const gate = new LidarRequestGate();
+    gate.reset();
+    const first = gate.issue();
+    const second = gate.issue();
+    const failure = new Error("network");
+
+    expect(resolveLidarRequestCommit(gate, second, { status: "rejected", reason: failure })).toEqual({
+      status: "rejected",
+      reason: failure,
+    });
+
+    const cloud = new Float32Array([1, 0, 0, 1]);
+    expect(resolveLidarRequestCommit(gate, first, { status: "fulfilled", value: cloud })).toEqual({
+      status: "accepted",
+      value: cloud,
+    });
+
+    const third = gate.issue();
+    const fourth = gate.issue();
+    expect(resolveLidarRequestCommit(gate, fourth, { status: "fulfilled", value: cloud }).status).toBe("accepted");
+    expect(resolveLidarRequestCommit(gate, third, { status: "rejected", reason: failure })).toEqual({
+      status: "stale",
+    });
+  });
+
+  it("does not repopulate completed cache entries after clear", async () => {
+    let resolveFetch!: (response: Response) => void;
+    const fetchFrame = vi.fn(() => new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    }));
+    const cache = new LidarFrameCache(6, fetchFrame as unknown as typeof fetch);
+
+    const pending = cache.load("old-scene.bin");
+    cache.clear();
+    resolveFetch(new Response(new Float32Array([1, 0, 0, 1]).buffer));
+    await pending;
+
+    expect(cache.get("old-scene.bin")).toBeUndefined();
   });
 });

@@ -1,13 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent, WheelEvent } from "react";
-import { RiskEventsPanel } from "./RiskEventsPanel";
+import { RiskEventsList } from "./RiskEventsPanel";
 import { deriveRiskEvents } from "./risk-events";
 import type { RiskEvent } from "./risk-events";
+import BorderGlow from "./BorderGlow";
+import ContextCardsDemo, { ContextCardsSection } from "./ContextCardsDemo";
+import MotionHeadline from "./MotionHeadline";
+import PositioningSection from "./PositioningSection";
+import PositioningOrbitDemo from "./PositioningOrbitDemo";
+import ShowcaseNav from "./ShowcaseNav";
+import ShowcaseOpening from "./ShowcaseOpening";
+import TechnicalRouteSection from "./TechnicalRouteSection";
 import { LidarBev, type LidarHistoryCloud } from "./LidarBev";
-import SoftAurora from "./SoftAurora";
-import { findNearestLidarFrame, LidarFrameCache, loadLidarIndex } from "./lidar";
-import type { LidarIndex } from "./lidar";
-import { forwardToScreenDown, verticalVisibleBounds } from "./bev-orientation";
+import TerrainBackdrop from "./TerrainBackdrop";
+import type { ShowcaseTerrainPreset } from "./terrain-presets";
+import { useShowcaseMotion } from "./useShowcaseMotion";
+import { useTerrainSectionPalette } from "./useTerrainSectionPalette";
+import {
+  findNearestLidarFrame,
+  LidarFrameCache,
+  LidarRequestGate,
+  loadLidarIndex,
+  resolveLidarRequestCommit,
+} from "./lidar";
+import type { LidarFrameIndex, LidarIndex } from "./lidar";
+import {
+  egoScreenYForForwardRange,
+  forwardToScreenUp,
+  screenXForLeft,
+  verticalVisibleBoundsForForwardUp,
+} from "./bev-orientation";
+import { routeTangentAndNormal, selectMapGeometry, type EgoPoint } from "./map-geometry";
 import {
   Activity,
   AlertTriangle,
@@ -19,7 +42,6 @@ import {
   Database,
   FileSearch,
   Gauge,
-  GitBranch,
   Layers3,
   LoaderCircle,
   Map,
@@ -28,12 +50,10 @@ import {
   Move,
   Plus,
   Radio,
-  Route,
   ChevronDown,
-  ServerCog,
-  Shield,
   ShieldCheck,
   Sparkles,
+  History,
   Zap,
 } from "lucide-react";
 
@@ -41,8 +61,9 @@ type RiskLevel = "low" | "medium" | "high" | "unknown";
 type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 type DiagnosisMode = "model" | "fallback" | "unknown";
 type MapViewport = { zoom: number; offsetX: number; offsetY: number };
+type LidarStatus = "loading" | "unavailable" | "ready" | "error";
 
-const DEFAULT_MAP_VIEWPORT: MapViewport = { zoom: 1, offsetX: 0, offsetY: 0 };
+export const DEFAULT_MAP_VIEWPORT: MapViewport = { zoom: 1, offsetX: 0, offsetY: 0 };
 const clampMapZoom = (zoom: number) => Math.min(2.6, Math.max(0.55, zoom));
 
 type TelemetryFrame = {
@@ -195,6 +216,59 @@ export function resolveReplayTime(event: Pick<RiskEvent, "seekTime">): number {
   return event.seekTime;
 }
 
+export function resolveLidarRequestKey(
+  sceneId: string,
+  frame: Pick<LidarFrameIndex, "file">,
+): string {
+  return `${sceneId}:${frame.file}`;
+}
+
+export type OwnedLidarIndex = { sceneId: string; index: LidarIndex };
+
+export type DiagnosisRequestOwner = {
+  sceneGeneration: number;
+  requestGeneration: number;
+  socketGeneration: number;
+};
+
+export function shouldAcceptDiagnosisResponse(
+  pending: DiagnosisRequestOwner | null,
+  activeSceneGeneration: number,
+  activeRequestGeneration: number,
+  responseSocketGeneration: number,
+): boolean {
+  return Boolean(
+    pending
+    && pending.sceneGeneration === activeSceneGeneration
+    && pending.requestGeneration === activeRequestGeneration
+    && pending.socketGeneration === responseSocketGeneration,
+  );
+}
+
+export function resolveLidarDisplayState(
+  status: LidarStatus,
+  candidateKey: string | null,
+  renderedKey: string | null,
+  hasPointCloud: boolean,
+): { tone: LidarStatus; text: string } {
+  if (status === "unavailable") return { tone: "unavailable", text: "仅相机" };
+  if (status === "error") return { tone: "error", text: "读取失败" };
+  if (status === "ready" && hasPointCloud && candidateKey !== null && candidateKey === renderedKey) {
+    return { tone: "ready", text: "已同步" };
+  }
+  return { tone: "loading", text: "同步中" };
+}
+
+export function resolveLidarRequestCandidate(
+  selectedSceneId: string,
+  ownedIndex: OwnedLidarIndex | null,
+  currentTime: number,
+): { frame: LidarFrameIndex; key: string } | null {
+  if (!ownedIndex || ownedIndex.sceneId !== selectedSceneId) return null;
+  const frame = findNearestLidarFrame(ownedIndex.index, currentTime);
+  return frame ? { frame, key: resolveLidarRequestKey(selectedSceneId, frame) } : null;
+}
+
 export type OptionalLidarLoadResult = {
   index: LidarIndex | null;
   errorMessage: string | null;
@@ -215,6 +289,17 @@ export async function loadOptionalLidarIndex(
 
 function resolveLidarFrameUrl(indexFile: string, frameFile: string): string {
   return new URL(frameFile, new URL(indexFile, window.location.origin)).toString();
+}
+
+export function clearMapCanvasBitmap(canvas: HTMLCanvasElement | null): void {
+  if (!canvas) return;
+  const context = canvas.getContext("2d");
+  if (!context) return;
+
+  context.save();
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.restore();
 }
 
 function formatNumber(value: number, digits = 1) {
@@ -248,7 +333,14 @@ function deriveFrameRisk(frame: TelemetryFrame | null, perception: PerceptionFra
   return "low";
 }
 
-function drawEgoCar(ctx: CanvasRenderingContext2D, x: number, y: number, size = 1, alpha = 1, variant: "pink" | "white" = "pink") {
+function drawEgoCar(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  size = 1,
+  alpha = 1,
+  variant: "pink" | "white" = "pink",
+) {
   ctx.save();
   ctx.translate(x, y);
   ctx.globalAlpha = alpha;
@@ -295,8 +387,6 @@ function useBevCanvas(frames: PerceptionFrame[], frame: PerceptionFrame | null, 
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(cssWidth * dpr);
     canvas.height = Math.round(cssHeight * dpr);
-    canvas.style.width = `${cssWidth}px`;
-    canvas.style.height = `${cssHeight}px`;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) {
@@ -485,20 +575,59 @@ function useMapCanvas(
   currentFrame: PerceptionFrame | null,
   canvasRef: React.RefObject<HTMLCanvasElement | null>,
   viewport: MapViewport,
+  active: boolean,
 ) {
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+
   useEffect(() => {
+    if (!active) {
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    const parent = canvas?.parentElement;
+    if (!canvas || !parent) {
+      return;
+    }
+
+    const updateCanvasSize = (observedWidth?: number, observedHeight?: number) => {
+      const bounds = parent.getBoundingClientRect();
+      const width = Math.max(observedWidth || parent.clientWidth || bounds.width || 320, 280);
+      const height = Math.max(observedHeight || parent.clientHeight || bounds.height || 220, 180);
+      setCanvasSize((currentSize) => (
+        currentSize.width === width && currentSize.height === height
+          ? currentSize
+          : { width, height }
+      ));
+    };
+
+    updateCanvasSize();
+    const resizeObserver = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      updateCanvasSize(entry?.contentRect.width, entry?.contentRect.height);
+    });
+    resizeObserver.observe(parent);
+
+    return () => resizeObserver.disconnect();
+  }, [active, canvasRef]);
+
+  useEffect(() => {
+    if (!active || canvasSize.width <= 0 || canvasSize.height <= 0) {
+      return;
+    }
+
     const canvas = canvasRef.current;
     if (!canvas) {
       return;
     }
-    const parent = canvas.parentElement;
-    const cssWidth = Math.max(parent?.clientWidth ?? 320, 280);
-    const cssHeight = Math.max(parent?.clientHeight ?? 220, 180);
+
+    const cssWidth = canvasSize.width;
+    const cssHeight = canvasSize.height;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(cssWidth * dpr);
-    canvas.height = Math.round(cssHeight * dpr);
-    canvas.style.width = `${cssWidth}px`;
-    canvas.style.height = `${cssHeight}px`;
+    const backingWidth = Math.round(cssWidth * dpr);
+    const backingHeight = Math.round(cssHeight * dpr);
+    if (canvas.width !== backingWidth) canvas.width = backingWidth;
+    if (canvas.height !== backingHeight) canvas.height = backingHeight;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) {
@@ -506,56 +635,39 @@ function useMapCanvas(
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssWidth, cssHeight);
-    const mapBackground = ctx.createLinearGradient(0, 0, cssWidth, cssHeight);
-    mapBackground.addColorStop(0, "#17243a");
-    mapBackground.addColorStop(1, "#0d1729");
+    const mapBackground = ctx.createLinearGradient(0, 0, 0, cssHeight);
+    mapBackground.addColorStop(0, "#0a1719");
+    mapBackground.addColorStop(1, "#050b0d");
     ctx.fillStyle = mapBackground;
     ctx.fillRect(0, 0, cssWidth, cssHeight);
 
-    if (frames.length < 2) {
-      return;
-    }
-
-    const currentIndex = currentFrame ? Math.max(0, frames.indexOf(currentFrame)) : 0;
     const panel = { x: 18, y: 18, width: cssWidth - 36, height: cssHeight - 36 };
-    const current = currentFrame ?? frames[0];
-    const heading = current.ego.yaw;
-    const cos = Math.cos(heading);
-    const sin = Math.sin(heading);
     const view = { front: 76, rear: 12, side: 22 };
     const scale = Math.min(panel.width / (view.side * 2), panel.height / (view.front + view.rear)) * viewport.zoom;
     const egoCanvas = {
       x: panel.x + panel.width / 2 + viewport.offsetX,
-      y: panel.y + view.rear * scale + viewport.offsetY,
+      y: egoScreenYForForwardRange(panel.y, panel.height, scale, view.front, view.rear) + viewport.offsetY,
     };
-    const verticalBounds = verticalVisibleBounds(panel.y, panel.y + panel.height, egoCanvas.y, scale);
+    const verticalBounds = verticalVisibleBoundsForForwardUp(panel.y, panel.y + panel.height, egoCanvas.y, scale);
     const visibleBounds = {
-      minLeft: (panel.x - egoCanvas.x) / scale,
-      maxLeft: (panel.x + panel.width - egoCanvas.x) / scale,
+      minLeft: (egoCanvas.x - (panel.x + panel.width)) / scale,
+      maxLeft: (egoCanvas.x - panel.x) / scale,
       minForward: verticalBounds.minForward,
       maxForward: verticalBounds.maxForward,
-    };
-    const toEgo = (frame: PerceptionFrame) => {
-      const dx = frame.ego.x - current.ego.x;
-      const dy = frame.ego.y - current.ego.y;
-      return {
-        forward: cos * dx + sin * dy,
-        left: -sin * dx + cos * dy,
-      };
     };
     const toCanvas = (forward: number, left: number) => {
       const depth = Math.min(1, Math.max(0, (forward - visibleBounds.minForward) / (visibleBounds.maxForward - visibleBounds.minForward || 1)));
       const lateralScale = 1.12 - depth * .58;
       return {
-        x: egoCanvas.x + left * scale * lateralScale,
-        y: forwardToScreenDown(forward, egoCanvas.y, scale, .76 + depth * .24),
+        x: screenXForLeft(left, egoCanvas.x, scale, lateralScale),
+        y: forwardToScreenUp(forward, egoCanvas.y, scale),
       };
     };
-    const pointToCanvas = (point: { forward: number; left: number }) => toCanvas(point.forward, point.left);
+    const pointToCanvas = (point: EgoPoint) => toCanvas(point.forward, point.left);
 
     ctx.save();
-    ctx.fillStyle = "rgba(12, 23, 41, 0.98)";
-    ctx.strokeStyle = "rgba(64, 106, 160, 0.55)";
+    ctx.fillStyle = "rgba(6, 17, 19, 0.99)";
+    ctx.strokeStyle = "rgba(104, 171, 167, 0.34)";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.roundRect(panel.x, panel.y, panel.width, panel.height, 6);
@@ -569,13 +681,12 @@ function useMapCanvas(
     ctx.clip();
 
     const localBackground = ctx.createLinearGradient(0, panel.y, 0, panel.y + panel.height);
-    localBackground.addColorStop(0, "rgba(22, 34, 56, 1)");
-    localBackground.addColorStop(0.48, "rgba(14, 24, 43, 1)");
-    localBackground.addColorStop(1, "rgba(8, 16, 31, 1)");
+    localBackground.addColorStop(0, "rgba(10, 29, 31, 1)");
+    localBackground.addColorStop(0.52, "rgba(7, 21, 24, 1)");
+    localBackground.addColorStop(1, "rgba(4, 13, 15, 1)");
     ctx.fillStyle = localBackground;
     ctx.fillRect(panel.x, panel.y, panel.width, panel.height);
 
-    type EgoPoint = { forward: number; left: number };
     const drawPolyline = (points: EgoPoint[], color: string, width: number, glow = 0, dash: number[] = []) => {
       if (points.length < 2) {
         return;
@@ -601,41 +712,68 @@ function useMapCanvas(
       ctx.restore();
     };
 
+    ctx.save();
+    ctx.strokeStyle = "rgba(117, 174, 171, 0.105)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 6]);
+    const firstGridLeft = Math.floor((visibleBounds.minLeft - 12) / 10) * 10;
+    const lastGridLeft = Math.ceil((visibleBounds.maxLeft + 12) / 10) * 10;
+    for (let left = firstGridLeft; left <= lastGridLeft; left += 10) {
+      const start = toCanvas(visibleBounds.minForward - 12, left);
+      const end = toCanvas(visibleBounds.maxForward + 12, left);
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+    }
+    const firstGridForward = Math.floor((visibleBounds.minForward - 12) / 10) * 10;
+    const lastGridForward = Math.ceil((visibleBounds.maxForward + 12) / 10) * 10;
+    for (let forward = firstGridForward; forward <= lastGridForward; forward += 10) {
+      const start = toCanvas(forward, visibleBounds.maxLeft + 12);
+      const end = toCanvas(forward, visibleBounds.minLeft - 12);
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    const current = currentFrame ?? frames[0];
+    if (!current) {
+      ctx.restore();
+      return;
+    }
+
+    const currentIndex = currentFrame ? Math.max(0, frames.indexOf(currentFrame)) : 0;
+    const heading = current.ego.yaw;
+    const cos = Math.cos(heading);
+    const sin = Math.sin(heading);
+    const toEgo = (frame: PerceptionFrame): EgoPoint => {
+      const dx = frame.ego.x - current.ego.x;
+      const dy = frame.ego.y - current.ego.y;
+      return {
+        forward: cos * dx + sin * dy,
+        left: -sin * dx + cos * dy,
+      };
+    };
     const routeStart = Math.max(0, currentIndex - 18);
     const routeEnd = Math.min(frames.length - 1, currentIndex + 82);
-    let localRoute = frames.slice(routeStart, routeEnd + 1).map(toEgo);
-    localRoute = localRoute.filter(
-      (point) =>
-        point.forward >= visibleBounds.minForward - 12 &&
-        point.forward <= visibleBounds.maxForward + 12 &&
-        point.left >= visibleBounds.minLeft - 12 &&
-        point.left <= visibleBounds.maxLeft + 12,
-    );
-    if (localRoute.length < 2) {
-      localRoute = [
-        { forward: visibleBounds.minForward, left: 0 },
-        { forward: visibleBounds.maxForward, left: 0 },
-      ];
-    }
+    const measuredEgoRoute = frames.slice(routeStart, routeEnd + 1).map(toEgo);
+    const measuredHistory = frames.slice(routeStart, currentIndex + 1).map(toEgo);
+    const geometry = selectMapGeometry(measuredEgoRoute, current.plannedPath, current.lanes);
 
     const offsetRoute = (points: EgoPoint[], halfWidth: number) => {
       const leftEdge: EgoPoint[] = [];
       const rightEdge: EgoPoint[] = [];
       points.forEach((point, index) => {
-        const previous = points[Math.max(0, index - 1)];
-        const next = points[Math.min(points.length - 1, index + 1)];
-        const tangentForward = next.forward - previous.forward;
-        const tangentLeft = next.left - previous.left;
-        const tangentLength = Math.hypot(tangentForward, tangentLeft) || 1;
-        const normalForward = -tangentLeft / tangentLength;
-        const normalLeft = tangentForward / tangentLength;
+        const { normal } = routeTangentAndNormal(points, index);
         leftEdge.push({
-          forward: point.forward + normalForward * halfWidth,
-          left: point.left + normalLeft * halfWidth,
+          forward: point.forward + normal.forward * halfWidth,
+          left: point.left + normal.left * halfWidth,
         });
         rightEdge.push({
-          forward: point.forward - normalForward * halfWidth,
-          left: point.left - normalLeft * halfWidth,
+          forward: point.forward - normal.forward * halfWidth,
+          left: point.left - normal.left * halfWidth,
         });
       });
       return { leftEdge, rightEdge };
@@ -673,46 +811,33 @@ function useMapCanvas(
     };
 
     const roadFill = ctx.createLinearGradient(0, panel.y, 0, panel.y + panel.height);
-    roadFill.addColorStop(0, "rgba(19, 33, 56, 1)");
-    roadFill.addColorStop(0.55, "rgba(12, 24, 43, 1)");
-    roadFill.addColorStop(1, "rgba(6, 16, 31, 1)");
+    roadFill.addColorStop(0, "rgba(17, 34, 38, 0.98)");
+    roadFill.addColorStop(0.55, "rgba(12, 27, 31, 0.98)");
+    roadFill.addColorStop(1, "rgba(8, 21, 24, 0.98)");
     const shoulderFill = ctx.createLinearGradient(0, panel.y, 0, panel.y + panel.height);
-    shoulderFill.addColorStop(0, "rgba(36, 59, 94, 0.92)");
-    shoulderFill.addColorStop(1, "rgba(23, 42, 72, 0.86)");
-    // Raised sand-table road layers: offset shadows create a tangible roadbed.
-    const roadShadow = localRoute.map((point) => ({ forward: point.forward - .85, left: point.left }));
-    drawRoadStrip(roadShadow, 11.2, "rgba(3, 9, 19, .55)", "rgba(66, 105, 158, .35)", 4);
-    drawRoadStrip(localRoute, 10.4, shoulderFill, "rgba(74, 121, 183, 0.55)");
-    const laneEdges = drawRoadStrip(localRoute, 6.3, roadFill, "rgba(66, 112, 174, 0.7)", 3);
-    drawPolyline(laneEdges.leftEdge, "rgba(230, 239, 255, 0.78)", 1.4);
-    drawPolyline(laneEdges.rightEdge, "rgba(230, 239, 255, 0.78)", 1.4);
-    // The yellow dashed divider establishes the same navigation-road hierarchy as the reference view.
-    const yellowDivider = offsetRoute(localRoute, 1.85).leftEdge;
-    drawPolyline(yellowDivider, "#f4c534", 1.7, 2, [10, 9]);
+    shoulderFill.addColorStop(0, "rgba(29, 51, 55, 0.95)");
+    shoulderFill.addColorStop(1, "rgba(18, 37, 41, 0.92)");
+    const roadShadow = geometry.road.map((point) => ({ forward: point.forward - .65, left: point.left }));
+    drawRoadStrip(roadShadow, 10.9, "rgba(1, 7, 9, .58)", "rgba(72, 119, 118, .22)", 3);
+    drawRoadStrip(geometry.road, 10.1, shoulderFill, "rgba(83, 139, 136, 0.36)");
+    const roadEdges = drawRoadStrip(geometry.road, 6.2, roadFill, "rgba(103, 164, 160, 0.46)", 2);
 
-    for (let marker = Math.max(10, Math.ceil(visibleBounds.minForward / 10) * 10); marker <= visibleBounds.maxForward; marker += 10) {
-      const routePoint = localRoute.reduce((nearest, point) => (Math.abs(point.forward - marker) < Math.abs(nearest.forward - marker) ? point : nearest), localRoute[0]);
-      const y = pointToCanvas(routePoint).y;
-      if (y > panel.y + 8 && y < panel.y + panel.height - 8) {
-        ctx.save();
-        ctx.strokeStyle = "rgba(232, 240, 255, 0.75)";
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 7]);
-        ctx.beginPath();
-        ctx.moveTo(egoCanvas.x - 5.8 * scale, y);
-        ctx.lineTo(egoCanvas.x + 5.8 * scale, y);
-        ctx.stroke();
-        ctx.restore();
-      }
-    }
+    drawPolyline(roadEdges.leftEdge, "rgba(197, 226, 222, 0.48)", 1.2);
+    drawPolyline(roadEdges.rightEdge, "rgba(197, 226, 222, 0.48)", 1.2);
+    geometry.lanes.forEach((lane) => {
+      drawPolyline(
+        lane.points,
+        lane.id === "ego" ? "rgba(126, 183, 179, 0.3)" : "rgba(206, 231, 226, 0.58)",
+        lane.id === "ego" ? 1 : 1.25,
+        0,
+        [7, 8],
+      );
+    });
 
-    const pastRoute = localRoute.filter((point) => point.forward <= 0.8);
-    const futureRoute = localRoute.filter((point) => point.forward >= -0.4);
-    drawPolyline(pastRoute, "rgba(8, 105, 244, 0.85)", 10, 8);
-    drawPolyline(pastRoute, "#0575f5", 5.4, 10);
-    drawPolyline(futureRoute, "rgba(0, 238, 187, 0.24)", 14, 10);
-    drawPolyline(futureRoute, "#00cfa9", 7.2, 15);
-    drawPolyline(futureRoute, "rgba(137, 255, 231, 0.92)", 1.2, 0, [10, 13]);
+    drawPolyline(measuredHistory, "rgba(20, 108, 232, 0.3)", 7, 5);
+    drawPolyline(measuredHistory, "#1687e8", 3.2, 6);
+    drawPolyline(geometry.plannedPath, "rgba(153, 229, 86, 0.24)", 9, 7);
+    drawPolyline(geometry.plannedPath, "#9be556", 3.8, 8);
 
     current.objects.forEach((object) => {
       if (
@@ -742,50 +867,60 @@ function useMapCanvas(
       ctx.restore();
     });
 
-    drawEgoCar(ctx, egoCanvas.x, egoCanvas.y - 4, 1.1, 1, "white");
+    drawEgoCar(ctx, egoCanvas.x, egoCanvas.y, 1.05, 1, "white");
 
     ctx.restore();
-  }, [canvasRef, currentFrame, frames, viewport]);
+  }, [active, canvasRef, canvasSize, currentFrame, frames, viewport]);
 }
 
-function ProjectSite({ onOpenDemo }: { onOpenDemo: () => void }) {
-  const navItems = [["项目缘起", "#origin"], ["安全命题", "#context"], ["产品体系", "#product"], ["效果展示", "#demo"]];
-  return <main className="showcase">
-    <section className="showcase-hero" id="home">
-      <video className="hero-video" src="/sample.mp4" autoPlay muted loop playsInline />
+type ProjectSiteProps = {
+  onOpenDemo: () => void;
+  onTerrainPresetChange: (preset: ShowcaseTerrainPreset) => void;
+  playOpening: boolean;
+  onOpeningComplete: () => void;
+};
+
+export function ProjectSite({ onOpenDemo, onTerrainPresetChange, playOpening, onOpeningComplete }: ProjectSiteProps) {
+  const showcaseRef = useRef<HTMLElement | null>(null);
+  useTerrainSectionPalette(showcaseRef, onTerrainPresetChange);
+  useShowcaseMotion({ rootRef: showcaseRef, playOpening, onOpeningComplete });
+  return <main className="showcase" ref={showcaseRef}>
+    <ShowcaseOpening />
+    <ShowcaseNav />
+
+    <div className="showcase-scroll-content" data-lenis-content>
+    <section className="showcase-hero" data-motion-hero data-terrain-preset="hidden" id="home">
+      <video className="hero-video" data-motion-hero-media src="/sample.mp4" autoPlay muted loop playsInline />
       <div className="hero-wash" />
-      <nav className="showcase-nav">
-        <a className="brand" href="#home"><span className="brand-mark"><Shield size={18} /></span><span>智驾卫士</span><small>DRIVEGUARD</small></a>
-        <div className="nav-links">{navItems.map(([label, href]) => <a href={href} key={href}>{label}</a>)}</div>
-        <a className="contact-link" href="mailto:23050824@hdu.edu.cn">联系我们 <ArrowUpRight size={15} /></a>
-      </nav>
       <div className="hero-content content-width">
-        <p className="kicker"><span /> EXPLAINABLE AUTONOMY · 01</p>
-        <h1>让每一次<br /><em>自动驾驶决策</em>有据可循</h1>
-        <p className="hero-copy">面向智能驾驶研发、测试验证与安全审计的多智能体协作诊断平台。将不可见的失效路径，转化为可追溯、可复现、可优化的证据闭环。</p>
+        <p className="kicker"><span /> 可解释自动驾驶</p>
+        <MotionHeadline as="h1" label="让每一次自动驾驶决策有据可循" lines={[
+          <>让每一次</>, <><em>自动驾驶决策</em>有据可循</>,
+        ]} />
+        <p className="hero-copy" data-motion-copy>面向智能驾驶研发、测试验证与安全审计的多智能体协作诊断平台。将不可见的失效路径，转化为可追溯、可复现、可优化的证据闭环。</p>
         <div className="hero-actions"><button className="primary-cta" type="button" onClick={onOpenDemo}>进入效果展示 <ArrowDownRight size={18} /></button><a className="text-cta" href="#product">了解系统架构 <ArrowUpRight size={17} /></a></div>
       </div>
       <div className="hero-foot content-width"><span>HANGZHOU DIANZI UNIVERSITY</span><span>2026 / RESEARCH PROTOTYPE</span><span>SCROLL TO EXPLORE ↓</span></div>
     </section>
 
-    <section className="intro-section content-width" id="origin">
-      <div className="section-index">01 / WHY NOW</div>
-      <div className="intro-grid"><h2>从“能跑”到<br />“<em>说得清</em>为什么这样跑”</h2><div className="intro-copy"><p>智能驾驶正从功能验证迈向规模化应用。真正的安全，不止是识别一个目标，更在于能够还原关键时刻的感知、决策与控制链路。</p><p>智驾卫士将事故复盘从依赖经验的手工劳动，变成由多智能体协同完成的结构化诊断。</p></div></div>
-      <div className="proof-strip"><span><b>非侵入</b>接入</span><span><b>跨层</b>归因</span><span><b>闭环</b>优化</span><span><b>可审计</b>交付</span></div>
-    </section>
+    <PositioningSection />
 
-    <section className="policy-section" id="context"><div className="content-width">
-      <div className="section-index">02 / THE CONTEXT</div><div className="context-head"><h2>安全监管正在要求<br /><em>过程可信</em></h2><p>从智能网联汽车准入与上路通行试点，到“车路云一体化”应用试点，行业评价标准正由单一功能表现，转向运行边界、关键决策与安全响应的可验证能力。</p></div>
-      <div className="policy-grid"><article><span>2020</span><h3>智能汽车创新发展战略</h3><p>智能汽车体系建设进入国家战略视野。</p></article><article><span>2023</span><h3>准入与上路通行试点</h3><p>L3/L4 产品在限定区域开展验证与试点。</p></article><article><span>2024</span><h3>车路云一体化应用试点</h3><p>以数据处理与安全保障加快规模化落地。</p></article></div>
-    </div></section>
+    <ContextCardsSection embedded />
 
-    <section className="pain-section content-width"><div className="section-index">03 / THE GAP</div><div className="pain-header"><h2>复杂系统的失效，<br />不该只得到一句<em>“未识别”</em></h2><p>在长尾场景里，感知偏差、决策误判和控制策略会发生级联放大。现有“人工日志回放 + 规则匹配”的方式，很难回答根因，也难以沉淀为下一次的修复路径。</p></div><div className="pain-grid"><article><b>01</b><h3>数据孤岛</h3><p>多源数据分散在传感器、模型特征与控制链路中，难以时空对齐。</p></article><article><b>02</b><h3>黑箱归因</h3><p>系统只留下结果，研发人员无法定位“为什么在此刻做出这个决策”。</p></article><article><b>03</b><h3>被动修复</h3><p>海量正常日志淹没高价值失效样本，模型迭代仍依赖经验与猜测。</p></article></div></section>
+    <TechnicalRouteSection />
 
-    <section className="product-section" id="product"><div className="content-width"><div className="product-top"><div><div className="section-index">04 / OUR ANSWER</div><h2>把每一次异常<br />沉淀为下一次<em>进化</em></h2></div><p>以标准化协议连接数据，以协同智能体组织证据，以自动化闭环推动模型优化。</p></div><div className="architecture-card"><div className="architecture-title"><Sparkles size={18} /> 多智能体协作诊断引擎 <span>DIAGNOSIS ORCHESTRATION</span></div><div className="agent-flow"><div className="agent-node"><Database /><small>01</small><h3>协议接入</h3><p>非侵入式汇集多模态数据流</p></div><i /><div className="agent-node active"><BrainCircuit /><small>02</small><h3>诊断编排</h3><p>动态调度感知与决策分析</p></div><i /><div className="agent-node"><FileSearch /><small>03</small><h3>证据解码</h3><p>量化偏差，审计逻辑链</p></div><i /><div className="agent-node"><ShieldCheck /><small>04</small><h3>闭环优化</h3><p>产出高价值修复数据包</p></div></div></div><div className="feature-grid"><article><CircleCheck size={19} /><h3>算法结构描述协议</h3><p>不触碰模型权重，兼顾接入深度、数据主权与跨架构适配。</p></article><article><CircleCheck size={19} /><h3>数学 + 逻辑双重证据</h3><p>连接感知语义漂移与决策逻辑审计，让诊断结论可验证。</p></article><article><CircleCheck size={19} /><h3>诊断即训练</h3><p>从失效根因反向生成正确/错误推理对，驱动针对性迭代。</p></article></div></div></section>
+    <section className="demo-section" data-motion-section data-terrain-preset="demo" id="demo"><div className="content-width"><div className="demo-head"><div><div className="section-index" data-motion-index>04 / LIVE PROTOTYPE</div><MotionHeadline as="h2" label="真实场景中的证据链，直接进入驾驶舱" lines={[
+      <>真实场景中的证据链，</>, <><em>直接进入驾驶舱</em></>,
+    ]} /></div><p data-motion-copy>当前工程 Demo 基于 nuScenes 连续场景：前视视频、LiDAR 点云、局部地图、目标风险、历史事件与 AI 诊断在同一时间轴联动。</p></div><BorderGlow as="div" className="demo-card motion-block" backgroundColor="#10292b"><div className="demo-card-top"><span><i /> DRIVEGUARD / LIVE DEMO</span><span>nuScenes mini · CAM_FRONT · LiDAR TOP</span></div><div className="demo-visual" data-motion-media-frame><video data-motion-media src="/sample.mp4" autoPlay muted loop playsInline /><div className="demo-overlay"><span>视频 · 点云 · 地图 · 诊断同步</span><b>风险诊断<br />驾驶舱</b><div className="demo-metrics"><span>CAM_FRONT</span><span>LiDAR BEV</span><span>AI DIAGNOSIS</span></div></div><div className="mini-map"><Map size={18}/><i/><i/><i/><b /></div></div><div className="demo-card-bottom"><p>打开后可查看感知框、原始点云、地图轨迹、全域诊断和历史风险事件回放。</p><button type="button" onClick={onOpenDemo}>打开驾驶舱 <ArrowUpRight size={17}/></button></div></BorderGlow></div></section>
 
-    <section className="demo-section" id="demo"><div className="content-width"><div className="demo-head"><div><div className="section-index">05 / LIVE PROTOTYPE</div><h2>让证据，<em>看得见</em></h2></div><p>当前效果展示基于 nuScenes 真实连续场景：视频、目标感知、BEV、局部轨迹与 AI 风险诊断在同一时间轴联动。完整工程平台仍在持续建设。</p></div><div className="demo-card"><div className="demo-card-top"><span><i /> DRIVEGUARD / LIVE DEMO</span><span>nuScenes mini · CAM_FRONT</span></div><div className="demo-visual"><video src="/sample.mp4" autoPlay muted loop playsInline /><div className="demo-overlay"><span>前视相机 · 实时目标感知</span><b>风险诊断<br />驾驶舱</b><div className="demo-metrics"><span>12.4 km/h</span><span>BEV 14 objects</span><span>LOW RISK</span></div></div><div className="mini-map"><Map size={18}/><i/><i/><i/><b /></div></div><div className="demo-card-bottom"><p>这是当前可运行的工程 Demo。点击进入后，可查看真实感知框、历史风险事件、多场景数据入口与可交互地图。</p><button type="button" onClick={onOpenDemo}>打开驾驶舱 <ArrowUpRight size={17}/></button></div></div></div></section>
+    <section className="product-section" data-motion-section data-terrain-preset="product" id="product"><div className="content-width"><div className="product-top"><div><div className="section-index" data-motion-index>05 / PRODUCT CAPABILITY</div><MotionHeadline as="h2" label="把每一次异常沉淀为下一次进化" lines={[
+      <>把每一次异常</>, <>沉淀为下一次<em>进化</em></>,
+    ]} /></div><p data-motion-copy>产品能力围绕研发测试闭环展开：数据标准化接入、诊断任务编排、证据解码和训练数据包交付。</p></div><BorderGlow as="div" className="architecture-card motion-block" backgroundColor="#143235"><div className="architecture-title"><Sparkles size={18} /> 多智能体协作诊断引擎 <span>DIAGNOSIS ORCHESTRATION</span></div><div className="agent-flow" data-motion-stagger><BorderGlow as="div" className="agent-node" backgroundColor="rgba(255,255,255,.04)"><Database /><small>01</small><h3>诊断编排 Agent</h3><p>根据场景风险动态调度感知、决策与轨迹分析任务</p></BorderGlow><i /><BorderGlow as="div" className="agent-node active" backgroundColor="#d9f35b"><BrainCircuit /><small>02</small><h3>证据解码</h3><p>把模型偏差、目标风险和逻辑链组织成诊断病历</p></BorderGlow><i /><BorderGlow as="div" className="agent-node" backgroundColor="rgba(255,255,255,.04)"><FileSearch /><small>03</small><h3>训练数据包</h3><p>生成正确/错误推理对与高价值复盘样本</p></BorderGlow><i /><BorderGlow as="div" className="agent-node" backgroundColor="rgba(255,255,255,.04)"><ShieldCheck /><small>04</small><h3>工程化交付</h3><p>面向测试、审计和模型迭代输出可复用证据</p></BorderGlow></div></BorderGlow><div className="feature-grid" data-motion-stagger><BorderGlow as="article" backgroundColor="#f7faf7"><CircleCheck size={19} /><h3>算法结构描述协议</h3><p>不触碰模型权重，兼顾接入深度、数据主权与跨架构适配。</p></BorderGlow><BorderGlow as="article" backgroundColor="#f7faf7"><CircleCheck size={19} /><h3>数学 + 逻辑双重证据</h3><p>连接感知语义漂移与决策逻辑审计，让诊断结论可验证。</p></BorderGlow><BorderGlow as="article" backgroundColor="#f7faf7"><CircleCheck size={19} /><h3>诊断即训练</h3><p>从失效根因反向生成正确/错误推理对，驱动针对性迭代。</p></BorderGlow></div></div></section>
 
-    <footer className="showcase-footer" id="contact"><div className="content-width"><p className="kicker"><span /> LET'S MAKE AUTONOMY ACCOUNTABLE</p><h2>安全不是一句承诺。<br /><em>它应当被证明。</em></h2><a href="mailto:23050824@hdu.edu.cn">23050824@hdu.edu.cn <ArrowUpRight /></a><div className="footer-bottom"><span>智驾卫士 / DRIVEGUARD</span><span>杭州电子科技大学 · 计算机学院</span><span>© 2026</span></div></div></footer>
+    <footer className="showcase-footer showcase-footer-centered" data-motion-section data-terrain-preset="closing" id="contact"><div className="content-width footer-content"><p className="kicker"><span /> LET'S MAKE AUTONOMY ACCOUNTABLE</p><MotionHeadline as="h2" label="安全不是一句承诺。它应当被证明。" lines={[
+      <>安全不是一句承诺。</>, <><em>它应当被证明。</em></>,
+    ]} /><p className="footer-value" data-motion-copy>把异常片段、感知证据、决策逻辑和优化样本沉淀到同一条可追溯链路里。</p><div className="footer-bottom" data-motion-stagger><span data-motion-stagger-item>智驾卫士 / DRIVEGUARD</span><span data-motion-stagger-item>杭州电子科技大学 · 计算机学院</span><span data-motion-stagger-item>2026 RESEARCH PROTOTYPE</span></div></div></footer>
+    </div>
   </main>;
 }
 
@@ -796,6 +931,17 @@ function App() {
   const animationFrameRef = useRef<number | null>(null);
   const mapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const mapDragStartRef = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null);
+  const sceneLoadAbortRef = useRef<AbortController | null>(null);
+  const lidarPlaybackAbortRef = useRef<AbortController | null>(null);
+  const lidarRequestGateRef = useRef(new LidarRequestGate());
+  const sceneGenerationRef = useRef(0);
+  const diagnosisRequestGenerationRef = useRef(0);
+  const socketGenerationRef = useRef(0);
+  const pendingDiagnosisRef = useRef<DiagnosisRequestOwner | null>(null);
+  const showcaseOpeningPlayedRef = useRef(false);
+  const handleShowcaseOpeningComplete = useCallback(() => {
+    showcaseOpeningPlayedRef.current = true;
+  }, []);
   const [telemetry, setTelemetry] = useState<TelemetryFrame[]>([]);
   const [perception, setPerception] = useState<PerceptionFrame[]>([]);
   const [currentTime, setCurrentTime] = useState(0);
@@ -804,6 +950,8 @@ function App() {
   const [diagnosis, setDiagnosis] = useState<DiagnosisResult | null>(null);
   const [datasetMeta, setDatasetMeta] = useState<DatasetMeta | null>(null);
   const [scenes, setScenes] = useState<SceneManifestEntry[]>([LEGACY_SCENE]);
+  const scenesRef = useRef(scenes);
+  scenesRef.current = scenes;
   const [selectedSceneId, setSelectedSceneId] = useState(LEGACY_SCENE.id);
   const [sceneLoading, setSceneLoading] = useState(true);
   const [diagnosisMode, setDiagnosisMode] = useState<DiagnosisMode>("unknown");
@@ -811,12 +959,18 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [mapViewport, setMapViewport] = useState<MapViewport>(DEFAULT_MAP_VIEWPORT);
   const [showDashboard, setShowDashboard] = useState(false);
-  const [lidarIndex, setLidarIndex] = useState<LidarIndex | null>(null);
-  const [lidarStatus, setLidarStatus] = useState<"loading" | "unavailable" | "ready" | "error">("loading");
+  const handleOpenDemo = useCallback(() => {
+    showcaseOpeningPlayedRef.current = true;
+    setShowDashboard(true);
+  }, []);
+  const [terrainPreset, setTerrainPreset] = useState<ShowcaseTerrainPreset>("hidden");
+  const [ownedLidarIndex, setOwnedLidarIndex] = useState<OwnedLidarIndex | null>(null);
+  const [lidarStatus, setLidarStatus] = useState<LidarStatus>("loading");
   const [lidarError, setLidarError] = useState<string | null>(null);
   const [lidarCache] = useState(() => new LidarFrameCache());
   const [currentPointCloud, setCurrentPointCloud] = useState<Float32Array | null>(null);
   const [lidarHistory, setLidarHistory] = useState<LidarHistoryCloud[]>([]);
+  const [renderedLidarFrame, setRenderedLidarFrame] = useState<LidarFrameIndex | null>(null);
 
   const currentFrame = useMemo(() => findNearestFrame(telemetry, currentTime), [telemetry, currentTime]);
   const currentPerception = useMemo(() => findNearestFrame(perception, currentTime), [perception, currentTime]);
@@ -837,23 +991,32 @@ function App() {
       })
       .sort((a, b) => riskScore(b.risk) - riskScore(a.risk) || (a.cameraBox?.depth ?? 999) - (b.cameraBox?.depth ?? 999))
       .slice(0, 14) ?? [];
-  const sourceLabel = datasetMeta?.sourceLabel ?? "nuScenes mini";
   const sceneName = datasetMeta?.sceneName ?? "等待数据";
   const sampleCount = datasetMeta?.sampleCount ?? telemetry.length;
   const fps = datasetMeta?.videoFps ?? datasetMeta?.fps ?? 24;
-  const telemetryFps = datasetMeta?.telemetryFps ?? 12;
   const selectedScene = scenes.find((scene) => scene.id === selectedSceneId) ?? LEGACY_SCENE;
   const riskEvents = useMemo(() => deriveRiskEvents(telemetry, perception), [telemetry, perception]);
   const completedRiskEvents = useMemo(
     () => riskEvents.filter((event) => event.endTime <= currentTime + 0.05),
     [currentTime, riskEvents],
   );
-  const currentLidarFrame = useMemo(
-    () => lidarIndex ? findNearestLidarFrame(lidarIndex, currentTime) : null,
-    [currentTime, lidarIndex],
+  const lidarRequestCandidate = useMemo(
+    () => resolveLidarRequestCandidate(selectedScene.id, ownedLidarIndex, currentTime),
+    [currentTime, ownedLidarIndex, selectedScene.id],
+  );
+  const candidateLidarFrame = lidarRequestCandidate?.frame ?? null;
+  const candidateLidarKey = lidarRequestCandidate?.key ?? null;
+  const renderedLidarKey = renderedLidarFrame
+    ? resolveLidarRequestKey(selectedScene.id, renderedLidarFrame)
+    : null;
+  const lidarDisplayState = resolveLidarDisplayState(
+    lidarStatus,
+    candidateLidarKey,
+    renderedLidarKey,
+    currentPointCloud !== null,
   );
 
-  useMapCanvas(perception, currentPerception, mapCanvasRef, mapViewport);
+  useMapCanvas(perception, currentPerception, mapCanvasRef, mapViewport, showDashboard);
 
   const updateMapZoom = useCallback((factor: number) => {
     setMapViewport((viewport) => ({ ...viewport, zoom: clampMapZoom(viewport.zoom * factor) }));
@@ -888,6 +1051,54 @@ function App() {
     updateMapZoom(event.deltaY < 0 ? 1.12 : 1 / 1.12);
   }, [updateMapZoom]);
 
+  const resetScenePresentation = useCallback(() => {
+    setTelemetry([]);
+    setPerception([]);
+    setDatasetMeta(null);
+    setMapViewport(DEFAULT_MAP_VIEWPORT);
+    mapDragStartRef.current = null;
+  }, []);
+
+  const handleSceneSelection = useCallback((nextSceneId: string, nextSceneEntry?: SceneManifestEntry) => {
+    sceneGenerationRef.current += 1;
+    diagnosisRequestGenerationRef.current += 1;
+    const pendingDiagnosis = pendingDiagnosisRef.current;
+    pendingDiagnosisRef.current = null;
+    const diagnosisSocket = socketRef.current;
+    if (
+      pendingDiagnosis
+      && diagnosisSocket
+      && pendingDiagnosis.socketGeneration === socketGenerationRef.current
+    ) {
+      diagnosisSocket.onmessage = null;
+      if (diagnosisSocket.readyState !== WebSocket.CLOSED) diagnosisSocket.close();
+      if (socketRef.current === diagnosisSocket) socketRef.current = null;
+    }
+
+    sceneLoadAbortRef.current?.abort();
+    sceneLoadAbortRef.current = null;
+    lidarPlaybackAbortRef.current?.abort();
+    lidarPlaybackAbortRef.current = null;
+    lidarRequestGateRef.current.reset();
+    lidarCache.clear();
+
+    clearMapCanvasBitmap(mapCanvasRef.current);
+    resetScenePresentation();
+    setSceneLoading(true);
+    setDiagnosis(null);
+    setDiagnosing(false);
+    setError(null);
+    setCurrentTime(0);
+    setOwnedLidarIndex(null);
+    setCurrentPointCloud(null);
+    setLidarHistory([]);
+    setRenderedLidarFrame(null);
+    setLidarError(null);
+    const nextScene = nextSceneEntry ?? scenesRef.current.find((scene) => scene.id === nextSceneId);
+    setLidarStatus(nextScene && !resolveLidarSource(nextScene) ? "unavailable" : "loading");
+    setSelectedSceneId(nextSceneId);
+  }, [lidarCache, resetScenePresentation]);
+
   const connectSocket = useCallback(() => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       return;
@@ -895,14 +1106,23 @@ function App() {
 
     setConnectionStatus("connecting");
     const socket = new WebSocket(WS_URL);
+    const socketGeneration = ++socketGenerationRef.current;
     socketRef.current = socket;
 
     socket.onopen = () => {
+      if (socketRef.current !== socket) return;
       setConnectionStatus("connected");
       setError(null);
     };
 
     socket.onmessage = (event) => {
+      if (!shouldAcceptDiagnosisResponse(
+        pendingDiagnosisRef.current,
+        sceneGenerationRef.current,
+        diagnosisRequestGenerationRef.current,
+        socketGeneration,
+      )) return;
+      pendingDiagnosisRef.current = null;
       try {
         const payload = JSON.parse(event.data) as DiagnosisResult;
         setDiagnosis(payload);
@@ -921,12 +1141,21 @@ function App() {
     };
 
     socket.onerror = () => {
+      if (socketRef.current !== socket) return;
+      if (pendingDiagnosisRef.current?.socketGeneration === socketGeneration) {
+        pendingDiagnosisRef.current = null;
+      }
       setConnectionStatus("error");
       setDiagnosing(false);
       setError("WebSocket 连接异常，请确认后端服务是否启动。");
     };
 
     socket.onclose = () => {
+      if (socketRef.current && socketRef.current !== socket) return;
+      if (socketRef.current === socket) socketRef.current = null;
+      if (pendingDiagnosisRef.current?.socketGeneration === socketGeneration) {
+        pendingDiagnosisRef.current = null;
+      }
       setConnectionStatus("disconnected");
       setDiagnosing(false);
       if (reconnectTimerRef.current === null) {
@@ -952,28 +1181,40 @@ function App() {
           return;
         }
         setScenes(manifest.scenes);
-        setSelectedSceneId(manifest.defaultSceneId && manifest.scenes.some((scene) => scene.id === manifest.defaultSceneId)
-          ? manifest.defaultSceneId
-          : manifest.scenes[0].id);
+        const nextScene = manifest.defaultSceneId
+          ? manifest.scenes.find((scene) => scene.id === manifest.defaultSceneId) ?? manifest.scenes[0]
+          : manifest.scenes[0];
+        handleSceneSelection(nextScene.id, nextScene);
       })
       // The original single-file demo remains usable when a manifest is absent.
       .catch(() => undefined);
     return () => {
       active = false;
     };
-  }, []);
+  }, [handleSceneSelection]);
 
   useEffect(() => {
+    clearMapCanvasBitmap(mapCanvasRef.current);
+    resetScenePresentation();
+    sceneLoadAbortRef.current?.abort();
     const controller = new AbortController();
+    sceneLoadAbortRef.current = controller;
+    const sceneGeneration = sceneGenerationRef.current;
+    const ownsScene = () => !controller.signal.aborted && sceneGenerationRef.current === sceneGeneration;
+    lidarPlaybackAbortRef.current?.abort();
+    const lidarPlaybackController = new AbortController();
+    lidarPlaybackAbortRef.current = lidarPlaybackController;
+    lidarRequestGateRef.current.reset();
     const lidarSource = resolveLidarSource(selectedScene);
     setSceneLoading(true);
     setDiagnosis(null);
     setError(null);
     setCurrentTime(0);
     lidarCache.clear();
-    setLidarIndex(null);
+    setOwnedLidarIndex(null);
     setCurrentPointCloud(null);
     setLidarHistory([]);
+    setRenderedLidarFrame(null);
     setLidarStatus(lidarSource ? "loading" : "unavailable");
     setLidarError(null);
 
@@ -991,24 +1232,22 @@ function App() {
         : Promise.resolve(null),
     ])
       .then(([nextTelemetry, nextPerception, nextMeta]) => {
-        if (controller.signal.aborted) return;
+        if (!ownsScene()) return;
         setTelemetry(nextTelemetry);
         setPerception(nextPerception);
         setDatasetMeta(nextMeta);
         videoRef.current?.load();
       })
       .catch((fetchError: unknown) => {
-        if (!controller.signal.aborted) {
+        if (ownsScene()) {
           setTelemetry([]);
           setPerception([]);
           setDatasetMeta(null);
-          setLidarIndex(null);
-          setLidarStatus(lidarSource ? "error" : "unavailable");
           setError(`读取场景“${selectedScene.label}”失败：${fetchError instanceof Error ? fetchError.message : String(fetchError)}`);
         }
       })
       .finally(() => {
-        if (!controller.signal.aborted) setSceneLoading(false);
+        if (ownsScene()) setSceneLoading(false);
       });
 
     // LiDAR is optional: an unavailable or malformed index must not prevent the
@@ -1016,42 +1255,61 @@ function App() {
     if (lidarSource) {
       loadOptionalLidarIndex(lidarSource, controller.signal)
         .then(({ index, errorMessage }) => {
-          if (controller.signal.aborted) return;
-          setLidarIndex(index);
+          if (!ownsScene()) return;
+          setOwnedLidarIndex(index ? { sceneId: selectedScene.id, index } : null);
           if (errorMessage) {
             setLidarStatus("error");
             setLidarError(errorMessage);
           } else {
-            setLidarStatus("ready");
+            setLidarStatus("loading");
           }
         });
     }
 
-    return () => controller.abort();
-  }, [selectedScene]);
+    return () => {
+      controller.abort();
+      if (sceneLoadAbortRef.current === controller) sceneLoadAbortRef.current = null;
+      if (lidarPlaybackAbortRef.current === lidarPlaybackController) {
+        lidarPlaybackController.abort();
+        lidarPlaybackAbortRef.current = null;
+      }
+    };
+  }, [lidarCache, resetScenePresentation, selectedScene]);
 
   useEffect(() => {
     const lidarSource = resolveLidarSource(selectedScene);
-    if (!lidarIndex || !lidarSource || lidarIndex.frames.length === 0) {
+    const playbackSignal = lidarPlaybackAbortRef.current?.signal;
+    const lidarIndex = ownedLidarIndex?.sceneId === selectedScene.id ? ownedLidarIndex.index : null;
+    if (!lidarIndex || !lidarSource || !candidateLidarFrame || !candidateLidarKey || !playbackSignal || lidarIndex.frames.length === 0) {
       if (lidarSource && lidarIndex && lidarIndex.frames.length === 0) setLidarStatus("error");
       return;
     }
-    const current = findNearestLidarFrame(lidarIndex, currentTime);
-    if (!current) return;
-    const controller = new AbortController();
-    const currentIndex = lidarIndex.frames.indexOf(current);
+    const currentIndex = lidarIndex.frames.indexOf(candidateLidarFrame);
+    if (currentIndex < 0) return;
+    const ticket = lidarRequestGateRef.current.issue();
     const frames = lidarIndex.frames.slice(Math.max(0, currentIndex - 2), currentIndex + 1);
     // Keep the last successful point cloud visible while the next keyframe is fetched.
     // Switching to the loading branch here used to unmount the WebGL canvas every 100 ms.
     if (!currentPointCloud) {
       setLidarStatus("loading");
     }
-    Promise.all(frames.map((frame) => lidarCache.load(resolveLidarFrameUrl(lidarSource, frame.file), controller.signal)))
-      .then((clouds) => {
-        if (controller.signal.aborted) return;
-        setCurrentPointCloud(clouds.at(-1) ?? null);
-        const currentPose = findNearestFrame(perception, current.time)?.ego;
-        const history = clouds.slice(0, -1).flatMap((points, index): LidarHistoryCloud[] => {
+    Promise.allSettled(frames.map((frame) => lidarCache.load(resolveLidarFrameUrl(lidarSource, frame.file), playbackSignal)))
+      .then((results) => {
+        if (playbackSignal.aborted) return;
+        const currentCommit = resolveLidarRequestCommit(lidarRequestGateRef.current, ticket, results.at(-1));
+        if (currentCommit.status === "stale") return;
+        if (currentCommit.status === "rejected") {
+          const loadError = currentCommit.reason;
+          const errorMessage = loadError instanceof Error ? loadError.message : String(loadError ?? "unknown error");
+          setLidarStatus("error");
+          setLidarError(errorMessage);
+          return;
+        }
+
+        setCurrentPointCloud(currentCommit.value);
+        const currentPose = findNearestFrame(perception, candidateLidarFrame.time)?.ego;
+        const history = results.slice(0, -1).flatMap((result, index): LidarHistoryCloud[] => {
+          if (result.status === "rejected") return [];
           const source = frames[index];
           const sourcePose = findNearestFrame(perception, source.time)?.ego;
           if (!currentPose || !sourcePose) return [];
@@ -1060,25 +1318,18 @@ function App() {
           const cos = Math.cos(currentPose.yaw);
           const sin = Math.sin(currentPose.yaw);
           return [{
-            points,
+            points: result.value,
             forward: cos * dx + sin * dy,
             left: -sin * dx + cos * dy,
             headingDelta: sourcePose.yaw - currentPose.yaw,
           }];
         });
         setLidarHistory(history);
+        setRenderedLidarFrame(candidateLidarFrame);
         setLidarStatus("ready");
-      })
-      .catch((loadError: unknown) => {
-        if (!controller.signal.aborted) {
-          setCurrentPointCloud(null);
-          setLidarHistory([]);
-          setLidarStatus("error");
-          setError(`读取 LiDAR 点云失败：${loadError instanceof Error ? loadError.message : String(loadError)}`);
-        }
+        setLidarError(null);
       });
-    return () => controller.abort();
-  }, [currentTime, lidarCache, lidarIndex, selectedScene]);
+  }, [candidateLidarKey, lidarCache, ownedLidarIndex, perception, selectedScene.id, selectedScene.lidarIndexFile]);
 
   useEffect(() => {
     let active = true;
@@ -1118,8 +1369,16 @@ function App() {
     return () => {
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
       }
-      socketRef.current?.close();
+      pendingDiagnosisRef.current = null;
+      const socket = socketRef.current;
+      socketRef.current = null;
+      if (socket) {
+        socket.onmessage = null;
+        socket.onclose = null;
+        socket.close();
+      }
     };
   }, [connectSocket]);
 
@@ -1149,21 +1408,33 @@ function App() {
       return;
     }
 
+    const requestGeneration = ++diagnosisRequestGenerationRef.current;
+    pendingDiagnosisRef.current = {
+      sceneGeneration: sceneGenerationRef.current,
+      requestGeneration,
+      socketGeneration: socketGenerationRef.current,
+    };
     setDiagnosing(true);
     setError(null);
-    socket.send(
-      JSON.stringify({
-        type: "diagnose",
-        frame: {
-          ...currentFrame,
-          perceptionSummary: {
-            objectCount: currentPerception?.objects.length ?? 0,
-            highRiskObjects,
-            mediumRiskObjects,
+    try {
+      socket.send(
+        JSON.stringify({
+          type: "diagnose",
+          frame: {
+            ...currentFrame,
+            perceptionSummary: {
+              objectCount: currentPerception?.objects.length ?? 0,
+              highRiskObjects,
+              mediumRiskObjects,
+            },
           },
-        },
-      }),
-    );
+        }),
+      );
+    } catch (sendError: unknown) {
+      pendingDiagnosisRef.current = null;
+      setDiagnosing(false);
+      setError(`诊断请求发送失败：${sendError instanceof Error ? sendError.message : String(sendError)}`);
+    }
   };
 
   const handleSeekRiskEvent = (time: number, event?: RiskEvent) => {
@@ -1185,8 +1456,16 @@ function App() {
     { label: "目标", value: `${currentPerception?.objects.length ?? 0}`, icon: Layers3 },
   ];
 
+  const demoParam = new URLSearchParams(window.location.search).get("demo");
+  const positioningOrbitDemo = demoParam === "positioning-orbit";
+  const contextCardsDemo = demoParam === "context-cards";
   const currentView = !showDashboard ? (
-    <ProjectSite onOpenDemo={() => setShowDashboard(true)} />
+    positioningOrbitDemo ? <PositioningOrbitDemo /> : contextCardsDemo ? <ContextCardsDemo /> : <ProjectSite
+      onOpenDemo={handleOpenDemo}
+      onTerrainPresetChange={setTerrainPreset}
+      playOpening={!showcaseOpeningPlayedRef.current}
+      onOpeningComplete={handleShowcaseOpeningComplete}
+    />
   ) : (
     <main className="app-shell">
       <section className="command-grid">
@@ -1196,13 +1475,16 @@ function App() {
             <h1>智驾感知诊断驾驶舱</h1>
           </div>
           <div className="header-actions">
-            <button className="back-site-button" type="button" onClick={() => setShowDashboard(false)}>项目官网</button>
+            <button className="back-site-button" type="button" onClick={() => {
+              setTerrainPreset("hidden");
+              setShowDashboard(false);
+            }}>项目官网</button>
             <label className="scene-selector" title="切换后会同步加载该场景的视频、车辆状态与感知数据">
               <Database size={15} aria-hidden="true" />
               <span>场景</span>
               <select
                 value={selectedSceneId}
-                onChange={(event) => setSelectedSceneId(event.target.value)}
+                onChange={(event) => handleSceneSelection(event.target.value)}
                 disabled={sceneLoading}
                 aria-label="选择数据场景"
               >
@@ -1214,6 +1496,35 @@ function App() {
             <span className={`risk-pill risk-${panelRisk}`}>{riskText[panelRisk]}</span>
           </div>
         </header>
+
+        <section className="bev-panel">
+          <div className="panel-title">
+            <Layers3 size={18} aria-hidden="true" />
+            <span>LiDAR 3D/BEV 感知</span>
+            <strong>高危 {highRiskObjects} / 中危 {mediumRiskObjects}</strong>
+          </div>
+          <LidarBev sceneId={selectedScene.id} pointCloud={currentPointCloud} frame={currentPerception} history={lidarHistory} status={lidarDisplayState.tone} errorMessage={lidarError} />
+          <div className="lidar-metadata" aria-label="LiDAR 数据状态">
+            <span>源 {resolveLidarSource(selectedScene) ?? "camera-only"}</span>
+            <span>点 {renderedLidarFrame?.pointCount.toLocaleString() ?? "--"}</span>
+            <span>关键帧 {renderedLidarFrame ? `${formatNumber(renderedLidarFrame.time, 2)}s` : "--"}</span>
+            <span className={`lidar-status lidar-status-${lidarDisplayState.tone}`}>{lidarDisplayState.text}</span>
+          </div>
+          <div className="live-monitor-panel" aria-label="实时监测">
+            <div className="result-title">
+              <Activity size={18} aria-hidden="true" />
+              <span>实时监测</span>
+              <strong>{riskText[frameRisk]}</strong>
+            </div>
+            <div className="live-monitor-grid">
+              <span>当前目标 <strong>{currentPerception?.objects.length ?? 0}</strong></span>
+              <span>高危 <strong>{highRiskObjects}</strong></span>
+              <span>中危 <strong>{mediumRiskObjects}</strong></span>
+              <span>车速 <strong>{formatNumber(currentFrame?.speedKmh ?? NaN)} km/h</strong></span>
+            </div>
+            <p>{currentFrame?.scene ?? "等待 nuScenes telemetry 加载..."}</p>
+          </div>
+        </section>
 
         <section className="camera-panel">
           <div className="panel-title">
@@ -1329,22 +1640,17 @@ function App() {
             </div>
             <p>{diagnosis?.conclusion ?? "等待当前帧诊断结果。"}</p>
           </div>
-        </aside>
 
-        <section className="bev-panel">
-          <div className="panel-title">
-            <Layers3 size={18} aria-hidden="true" />
-            <span>LiDAR 3D/BEV 感知</span>
-            <strong>高危 {highRiskObjects} / 中危 {mediumRiskObjects}</strong>
+          <div className="diagnosis-history-panel">
+            <div className="result-title">
+              <History size={18} aria-hidden="true" />
+              <span>历史风险事件</span>
+              <strong>{completedRiskEvents.length} 条</strong>
+            </div>
+            <p className="risk-events-hint">事件结束后自动归档；点击即可回到风险峰值帧，并同步视频、感知与轨迹视图。</p>
+            <RiskEventsList events={completedRiskEvents} currentTime={currentTime} onSeek={handleSeekRiskEvent} />
           </div>
-          <LidarBev pointCloud={currentPointCloud} frame={currentPerception} history={lidarHistory} status={lidarStatus} errorMessage={lidarError} />
-          <div className="lidar-metadata" aria-label="LiDAR 数据状态">
-            <span>源 {resolveLidarSource(selectedScene) ?? "camera-only"}</span>
-            <span>点 {currentLidarFrame?.pointCount.toLocaleString() ?? "--"}</span>
-            <span>关键帧 {currentLidarFrame ? `${formatNumber(currentLidarFrame.time, 2)}s` : "--"}</span>
-            <span className={`lidar-status lidar-status-${lidarStatus}`}>{lidarStatus === "ready" ? "已同步" : lidarStatus === "loading" ? "加载中" : lidarStatus === "unavailable" ? "仅相机" : "读取失败"}</span>
-          </div>
-        </section>
+        </aside>
 
         <section className="map-panel">
           <div className="panel-title">
@@ -1378,38 +1684,21 @@ function App() {
               <Move size={13} aria-hidden="true" /> 拖拽平移 · 滚轮缩放
             </div>
           </div>
-          <div className="metadata-strip">
-            <span title={sceneName}>
-              <Database size={15} aria-hidden="true" />
-              {sourceLabel}
-            </span>
-            <span title={backendModel ?? "本地规则诊断"}>
-              <ServerCog size={15} aria-hidden="true" />
-              {modeText[diagnosisMode]} {backendModel ? `· ${backendModel}` : ""}
-            </span>
-            <span title={datasetMeta?.frameMode ?? ""}>
-              <Route size={15} aria-hidden="true" />
-              {datasetMeta?.frameMode ?? "continuous frames"}
-            </span>
-            <span title="视频插帧渲染帧率 / telemetry 原始时间轴">
-              <GitBranch size={15} aria-hidden="true" />
-              video {formatNumber(fps, 0)}fps · telemetry {formatNumber(telemetryFps, 0)}fps
-            </span>
-          </div>
         </section>
 
-        <RiskEventsPanel events={completedRiskEvents} currentTime={currentTime} onSeek={handleSeekRiskEvent} />
       </section>
     </main>
   );
 
   return (
-    <div className="app-stage">
-      <div className="app-aurora" aria-hidden="true">
-        <SoftAurora speed={0.42} scale={1.7} brightness={0.46} color1="#f7f7f7" color2="#79e6b2" bandSpread={1.2} mouseInfluence={0.11} />
-      </div>
-      <div className="app-content">{currentView}</div>
-    </div>
+    <>
+      <TerrainBackdrop
+        view={showDashboard ? "dashboard" : "showcase"}
+        preset={terrainPreset}
+        risk={panelRisk}
+      />
+      {currentView}
+    </>
   );
 }
 

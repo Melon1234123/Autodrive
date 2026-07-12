@@ -649,6 +649,39 @@ def write_outputs(
         f.write("\n")
 
 
+def update_scene_manifest(manifest_path: Path, output_dir: Path, scene: dict[str, Any], scene_id: str | None) -> None:
+    """Upsert this converted scene in the frontend scene switcher manifest."""
+    safe_id = scene_id or str(scene.get("name") or scene.get("token") or "scene")
+    safe_id = "".join(char if char.isalnum() or char in "-_" else "-" for char in safe_id).strip("-") or "scene"
+    try:
+        relative_dir = output_dir.resolve().relative_to(manifest_path.parent.resolve())
+    except ValueError as error:
+        raise ValueError("--output-dir must be inside the directory containing --manifest.") from error
+    relative_prefix = relative_dir.as_posix().strip("/")
+    prefix = f"/{relative_prefix}" if relative_prefix and relative_prefix != "." else ""
+    paths = {name: f"{prefix}/{name}" for name in ("sample.mp4", "telemetry.json", "perception.json", "dataset-meta.json")}
+    entry = {
+        "id": safe_id,
+        "label": f"nuScenes {scene.get('name', safe_id)}",
+        "description": scene.get("description", ""),
+        "videoFile": paths["sample.mp4"],
+        "telemetryFile": paths["telemetry.json"],
+        "perceptionFile": paths["perception.json"],
+        "metadataFile": paths["dataset-meta.json"],
+    }
+    manifest: dict[str, Any] = {"version": 1, "defaultSceneId": safe_id, "scenes": []}
+    if manifest_path.exists():
+        manifest = load_json(manifest_path)
+        manifest.setdefault("version", 1)
+        manifest.setdefault("defaultSceneId", safe_id)
+        manifest.setdefault("scenes", [])
+    manifest["scenes"] = [item for item in manifest["scenes"] if item.get("id") != safe_id] + [entry]
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    with manifest_path.open("w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a richer Autodrive demo from nuScenes mini.")
     parser.add_argument("--dataroot", type=Path, default=DEFAULT_DATAROOT)
@@ -656,6 +689,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scene", help="nuScenes scene name/token. Default chooses a dense scene automatically.")
     parser.add_argument("--camera", default="CAM_FRONT")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--manifest", type=Path, help="Upsert the converted scene into this frontend scenes.json manifest.")
+    parser.add_argument("--scene-id", help="Stable id used by --manifest (defaults to the nuScenes scene name).")
     parser.add_argument("--fps", type=float, default=12.0, help="Source image sequence FPS used to preserve the real scene duration.")
     parser.add_argument("--render-fps", type=float, default=24.0, help="MP4 output FPS after motion interpolation for smoother playback.")
     parser.add_argument("--max-frames", type=int, default=360)
@@ -691,6 +726,8 @@ def main() -> int:
     render_fps = max(args.render_fps, args.fps)
     write_outputs(args.output_dir.resolve(), scene, dataroot, telemetry, perception, args.fps, render_fps, not args.keyframes_only)
     write_video(frames, args.output_dir.resolve() / "sample.mp4", args.fps, render_fps, find_ffmpeg(args.ffmpeg))
+    if args.manifest:
+        update_scene_manifest(args.manifest.resolve(), args.output_dir.resolve(), scene, args.scene_id)
 
     print(f"[ok] scene: {scene.get('name')} - {scene.get('description', '')}")
     print(f"[ok] telemetry frames: {len(frames)} at {args.fps:g} FPS")
@@ -699,6 +736,8 @@ def main() -> int:
     print(f"[ok] wrote: {args.output_dir.resolve() / 'telemetry.json'}")
     print(f"[ok] wrote: {args.output_dir.resolve() / 'perception.json'}")
     print(f"[ok] wrote: {args.output_dir.resolve() / 'dataset-meta.json'}")
+    if args.manifest:
+        print(f"[ok] updated scene manifest: {args.manifest.resolve()}")
     return 0
 
 

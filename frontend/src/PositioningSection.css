@@ -1,8 +1,44 @@
-.positioning-copy-single { max-width:900px; }
-.positioning-section .positioning-archive-deck { margin-top:clamp(28px,4vh,46px); }
-.showcase-scroll-content > .intro-section.positioning-section::before { background:rgba(243,244,232,.62); }
-
-@media (min-width:901px) {
-  .positioning-copy-single { max-width:min(760px,62%); }
-  .positioning-section .positioning-archive-deck { margin-top:clamp(38px,5vh,72px); }
+.positioning-section {
+  --positioning-layout-shift: clamp(24px, 2vw, 40px);
+  min-height: 100vh;
+  padding: 0;
+  overflow: clip;
 }
+
+.positioning-section .positioning-orbit-embedded-canvas {
+  --orbit-layout-shift: calc(clamp(-40px, calc(24vw - 296px), 160px) + var(--positioning-layout-shift));
+  width: 100%;
+  height: 100vh;
+  min-height: 760px;
+  margin: 0;
+}
+
+.positioning-section .positioning-orbit-fixed-copy {
+  left: calc(3.5% + var(--positioning-layout-shift));
+  transform: translateY(calc(-50% - 40px));
+}
+
+.positioning-section .positioning-orbit-fixed-copy h2 {
+  font-size: clamp(32px, 3.05vw, 52px);
+  line-height: 1.08;
+  letter-spacing: -0.055em;
+}
+
+.positioning-section .positioning-orbit-fixed-copy > .section-index { font-size: 12px; }
+.positioning-section .positioning-orbit-fixed-copy > p:not(.positioning-orbit-kicker) { max-width: 390px; font-size: 15px; }
+
+.positioning-section .positioning-orbit-card {
+  grid-template-columns: 60px minmax(0, 1fr);
+  gap: 18px;
+  min-height: 160px;
+}
+
+.positioning-section .positioning-orbit-bound-row { right: clamp(36px, 6vw, 120px); }
+
+.positioning-section .positioning-orbit-card-number {
+  font-size: clamp(58px, 4.9vw, 82px);
+}
+.positioning-section .positioning-orbit-card-copy strong { font-size: 26px; }
+.positioning-section .positioning-orbit-card-copy span { font-size: 15px; line-height: 1.7; }
+
+.showcase-scroll-content > .intro-section.positioning-section::before { background:rgba(243,244,232,.62); }

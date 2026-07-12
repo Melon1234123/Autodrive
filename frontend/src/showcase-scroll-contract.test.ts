@@ -23,6 +23,11 @@ describe("showcase full-page scroll contract", () => {
     expect(styles).toMatch(/\.showcase\s*\{[^}]*--showcase-content-width:min\(90vw,2480px\);/s);
     expect(styles).toMatch(/\.content-width\s*\{[^}]*width:var\(--showcase-content-width\);/s);
     expect(styles).toMatch(/\.showcase-nav\s*\{[^}]*width:var\(--showcase-content-width\);/s);
-    expect(styles).toMatch(/\.showcase-scroll-content>\.showcase-hero,[^\{]+\{[^}]*min-height:100svh;[^}]*height:auto;[^}]*overflow:visible;/s);
+    expect(styles).toMatch(/\.showcase-scroll-content>\.intro-section,[^\{]+\{[^}]*min-height:100svh;[^}]*height:auto;[^}]*overflow:visible;/s);
+  });
+
+  it("keeps hero media inside one viewport page", () => {
+    expect(styles).toMatch(/\.showcase-hero\s*\{[^}]*height:100svh;[^}]*max-height:100svh;[^}]*overflow:hidden;/s);
+    expect(styles).toMatch(/\.showcase-scroll-content>\.showcase-hero\s*\{[^}]*height:100svh;[^}]*max-height:100svh;[^}]*overflow:hidden;/s);
   });
 });

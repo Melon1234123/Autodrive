@@ -34,9 +34,64 @@ export function findNearestLidarFrame(index: LidarIndex, time: number): LidarFra
   );
 }
 
+export type LidarRequestTicket = { generation: number; sequence: number };
+
+export class LidarRequestGate {
+  #generation = 0;
+  #issued = 0;
+  #committed = 0;
+
+  reset(): number {
+    this.#generation += 1;
+    this.#issued = 0;
+    this.#committed = 0;
+    return this.#generation;
+  }
+
+  issue(): LidarRequestTicket {
+    return { generation: this.#generation, sequence: ++this.#issued };
+  }
+
+  accept(ticket: LidarRequestTicket): boolean {
+    if (ticket.generation !== this.#generation || ticket.sequence <= this.#committed) {
+      return false;
+    }
+    this.#committed = ticket.sequence;
+    return true;
+  }
+
+  isLatest(ticket: LidarRequestTicket): boolean {
+    return ticket.generation === this.#generation && ticket.sequence === this.#issued;
+  }
+}
+
+export type LidarRequestCommitResult<T> =
+  | { status: "accepted"; value: T }
+  | { status: "rejected"; reason: unknown }
+  | { status: "stale" };
+
+export function resolveLidarRequestCommit<T>(
+  gate: LidarRequestGate,
+  ticket: LidarRequestTicket,
+  result: PromiseSettledResult<T> | undefined,
+): LidarRequestCommitResult<T> {
+  if (!result || result.status === "rejected") {
+    if (!gate.isLatest(ticket)) return { status: "stale" };
+    return {
+      status: "rejected",
+      reason: result?.status === "rejected" ? result.reason : new Error("LiDAR current frame result missing"),
+    };
+  }
+  return gate.accept(ticket)
+    ? { status: "accepted", value: result.value }
+    : { status: "stale" };
+}
+
 /** Caches decoded point clouds by URL, retaining the six most recently used frames. */
 export class LidarFrameCache {
   #entries = new Map<string, Float32Array>();
+  #pending = new Map<string, Promise<Float32Array>>();
+  #generation = 0;
 
   constructor(
     private readonly maxEntries = 6,
@@ -54,7 +109,9 @@ export class LidarFrameCache {
   }
 
   clear(): void {
+    this.#generation += 1;
     this.#entries.clear();
+    this.#pending.clear();
   }
 
   get(url: string): Float32Array | undefined {
@@ -66,20 +123,36 @@ export class LidarFrameCache {
     return pointCloud;
   }
 
-  async load(url: string, signal?: AbortSignal): Promise<Float32Array> {
+  load(url: string, signal?: AbortSignal): Promise<Float32Array> {
     const cached = this.get(url);
-    if (cached) return cached;
+    if (cached) return Promise.resolve(cached);
 
-    const response = await this.fetchFrame(url, { signal });
-    if (!response.ok) {
-      throw new Error(`Unable to load LiDAR frame: ${response.status} ${response.statusText}`);
-    }
+    const existing = this.#pending.get(url);
+    if (existing) return existing;
 
-    const pointCloud = decodePointCloud(await response.arrayBuffer());
-    this.#entries.set(url, pointCloud);
-    while (this.#entries.size > this.maxEntries) {
-      this.#entries.delete(this.#entries.keys().next().value!);
-    }
-    return pointCloud;
+    const generation = this.#generation;
+    let pending!: Promise<Float32Array>;
+    pending = this.fetchFrame(url, { signal })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Unable to load LiDAR frame: ${response.status} ${response.statusText}`);
+        }
+
+        const pointCloud = decodePointCloud(await response.arrayBuffer());
+        if (generation === this.#generation) {
+          this.#entries.set(url, pointCloud);
+          while (this.#entries.size > this.maxEntries) {
+            this.#entries.delete(this.#entries.keys().next().value!);
+          }
+        }
+        return pointCloud;
+      })
+      .finally(() => {
+        if (this.#pending.get(url) === pending) {
+          this.#pending.delete(url);
+        }
+      });
+    this.#pending.set(url, pending);
+    return pending;
   }
 }

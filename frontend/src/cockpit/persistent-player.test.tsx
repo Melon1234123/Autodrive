@@ -69,6 +69,21 @@ function Harness({
 
 const drawImage = vi.fn();
 
+function setMediaCompletion(
+  video: HTMLVideoElement,
+  source: string,
+  readyState = HTMLMediaElement.HAVE_FUTURE_DATA,
+) {
+  Object.defineProperty(video, "currentSrc", {
+    configurable: true,
+    value: source ? new URL(source, window.location.href).href : "",
+  });
+  Object.defineProperty(video, "readyState", {
+    configurable: true,
+    value: readyState,
+  });
+}
+
 beforeEach(() => {
   ResizeObserverDouble.instances = [];
   drawImage.mockReset();
@@ -154,6 +169,7 @@ it("captures a static frame, changes source, and resets only when sceneKey chang
   expect(video.currentTime).toBe(0);
   expect(video.load).toHaveBeenCalledOnce();
 
+  setMediaCompletion(video, "/scenes/scene-0061/sample.mp4");
   fireEvent.canPlay(video);
   expect(freeze.hidden).toBe(true);
   expect(video.play).toHaveBeenCalledOnce();
@@ -229,21 +245,32 @@ it("ignores a stale canplay completion during a rapid B to C scene change", () =
   Object.defineProperty(video, "videoWidth", { value: 1280, configurable: true });
   Object.defineProperty(video, "videoHeight", { value: 720, configurable: true });
   let completedSource = "";
+  let readyState: number = HTMLMediaElement.HAVE_NOTHING;
   Object.defineProperty(video, "currentSrc", {
     configurable: true,
     get: () => completedSource,
+  });
+  Object.defineProperty(video, "readyState", {
+    configurable: true,
+    get: () => readyState,
   });
 
   rerender(<Harness activeScreen="live" sceneKey="scene-b" src="/scenes/b.mp4" />);
   rerender(<Harness activeScreen="live" sceneKey="scene-c" src="/scenes/c.mp4" />);
 
   const freeze = screen.getByTestId("persistent-scene-freeze") as HTMLCanvasElement;
-  completedSource = new URL("/scenes/b.mp4", window.location.href).href;
+  readyState = HTMLMediaElement.HAVE_FUTURE_DATA;
   fireEvent.canPlay(video);
   expect(freeze.hidden).toBe(false);
   expect(video.play).not.toHaveBeenCalled();
 
   completedSource = new URL("/scenes/c.mp4", window.location.href).href;
+  readyState = HTMLMediaElement.HAVE_CURRENT_DATA;
+  fireEvent.canPlay(video);
+  expect(freeze.hidden).toBe(false);
+  expect(video.play).not.toHaveBeenCalled();
+
+  readyState = HTMLMediaElement.HAVE_FUTURE_DATA;
   fireEvent.canPlay(video);
   expect(freeze.hidden).toBe(true);
   expect(video.play).toHaveBeenCalledOnce();
@@ -261,6 +288,7 @@ it("absorbs an autoplay rejection after the current scene becomes playable", asy
   const video = screen.getByTestId("persistent-scene-video") as HTMLVideoElement;
 
   rerender(<Harness activeScreen="live" sceneKey="scene-b" src="/scenes/b.mp4" />);
+  setMediaCompletion(video, "/scenes/b.mp4");
   fireEvent.canPlay(video);
   await Promise.resolve();
 

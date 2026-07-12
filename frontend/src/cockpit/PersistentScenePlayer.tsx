@@ -133,8 +133,13 @@ export function PersistentScenePlayer({
     loadGenerationRef.current = generation;
     const expectedSource = resolvedSource(src);
     const handleCanPlay = () => {
-      const completedSource = resolvedSource(video.currentSrc || video.src);
-      if (loadGenerationRef.current !== generation || completedSource !== expectedSource) return;
+      const completedSource = video.currentSrc;
+      if (
+        loadGenerationRef.current !== generation
+        || !completedSource
+        || completedSource !== expectedSource
+        || video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
+      ) return;
       video.removeEventListener("canplay", handleCanPlay);
       revealVideo(freezeRef.current);
       playWithoutUnhandledRejection(video);

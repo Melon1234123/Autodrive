@@ -143,6 +143,10 @@ Object.defineProperty(HTMLMediaElement.prototype, "play", {
   configurable: true,
   value: vi.fn(() => Promise.resolve()),
 });
+Object.defineProperty(Element.prototype, "scrollIntoView", {
+  configurable: true,
+  value: vi.fn(),
+});
 
 afterEach(() => {
   cleanup();
@@ -623,19 +627,25 @@ describe("scene-owned cockpit async state", () => {
     expect(screen.getByText("等待当前帧诊断结果。")).toBeInTheDocument();
   });
 
-  it("aborts visible report polling and rejects a completed old-scene report", async () => {
+  it("rejects a delayed old-scene report after the new scene job becomes owner", async () => {
     let resolveOldReport!: (response: Response) => void;
     const pendingOldReport = new Promise<Response>((resolve) => {
       resolveOldReport = resolve;
     });
-    let pollSignal: AbortSignal | undefined;
+    let resolveCurrentReport!: (response: Response) => void;
+    const pendingCurrentReport = new Promise<Response>((resolve) => {
+      resolveCurrentReport = resolve;
+    });
+    let oldPollSignal: AbortSignal | undefined;
     const baseFetch = createSceneFetch({ withLidar: false });
     const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/v1/diagnoses") && init?.method === "POST") {
+        const requestedScene = JSON.parse(String(init.body)).sceneKey as string;
+        const current = requestedScene === "scene-b";
         return Promise.resolve(jsonResponse({
-          jobId: "job-old",
-          sceneKey: "scene-a",
+          jobId: current ? "job-current" : "job-old",
+          sceneKey: requestedScene,
           dataVersion: "manifest-v1",
           stage: "validation",
           percent: 10,
@@ -644,9 +654,10 @@ describe("scene-owned cockpit async state", () => {
         }));
       }
       if (url.endsWith("/api/v1/diagnoses/job-old")) {
-        pollSignal = init?.signal ?? undefined;
+        oldPollSignal = init?.signal ?? undefined;
         return pendingOldReport;
       }
+      if (url.endsWith("/api/v1/diagnoses/job-current")) return pendingCurrentReport;
       return baseFetch(input);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -666,7 +677,17 @@ describe("scene-owned cockpit async state", () => {
     ));
 
     fireEvent.change(sceneSelector, { target: { value: "scene-b" } });
-    expect(pollSignal?.aborted).toBe(true);
+    expect(oldPollSignal?.aborted).toBe(true);
+    await waitFor(() => {
+      expect(sceneSelector).toHaveValue("scene-b");
+      expect(screen.getByRole("button", { name: "生成全场景报告" })).toBeEnabled();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "生成全场景报告" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/api\/v1\/diagnoses\/job-current$/),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ));
+
     await act(async () => {
       resolveOldReport(jsonResponse({
         jobId: "job-old",
@@ -678,9 +699,28 @@ describe("scene-owned cockpit async state", () => {
         error: null,
       }));
       await pendingOldReport;
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
     expect(screen.queryByText("STALE REPORT CONTENT")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveCurrentReport(jsonResponse({
+        jobId: "job-current",
+        sceneKey: "scene-b",
+        dataVersion: "manifest-v1",
+        stage: "complete",
+        percent: 100,
+        report: {
+          ...completedReport,
+          scene_name: "新场景报告",
+          executive_summary: "CURRENT REPORT CONTENT",
+        },
+        error: null,
+      }));
+      await pendingCurrentReport;
+    });
+    expect(await screen.findByText("CURRENT REPORT CONTENT")).toBeInTheDocument();
   });
 });
 

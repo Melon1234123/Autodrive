@@ -1508,11 +1508,21 @@ function App() {
     diagnosisJobOwnerRef.current = null;
     const sceneGeneration = sceneGenerationRef.current;
     const sceneKey = selectedScene.id;
+    let capturedOwner: DiagnosisJobOwner | null = null;
     const ownsCreation = () => (
       !controller.signal.aborted
       && diagnosisJobAbortRef.current === controller
       && sceneGenerationRef.current === sceneGeneration
       && selectedSceneIdRef.current === sceneKey
+    );
+    const ownsJob = (owner: DiagnosisJobOwner, responseJobId: string) => (
+      diagnosisJobOwnerRef.current === owner
+      && shouldAcceptDiagnosisJobUpdate(
+        owner,
+        sceneGenerationRef.current,
+        selectedSceneIdRef.current,
+        responseJobId,
+      )
     );
 
     setDiagnosisReport(null);
@@ -1525,6 +1535,7 @@ function App() {
       .then(async (created) => {
         if (!ownsCreation()) return null;
         const owner = { sceneGeneration, sceneKey, jobId: created.jobId };
+        capturedOwner = owner;
         diagnosisJobOwnerRef.current = owner;
         setReportStage(created.stage);
         setReportProgress(created.percent);
@@ -1532,24 +1543,17 @@ function App() {
         if (created.stage === "complete" && created.report) return created.report;
 
         return pollDiagnosisJob(API_URL, created.jobId, controller.signal, (snapshot) => {
-          if (!shouldAcceptDiagnosisJobUpdate(
-            diagnosisJobOwnerRef.current,
-            sceneGenerationRef.current,
-            selectedSceneIdRef.current,
-            snapshot.jobId,
-          )) return;
+          if (!ownsJob(owner, snapshot.jobId)) return;
           setReportStage(snapshot.stage);
           setReportProgress((current) => advanceDiagnosisProgress(current, snapshot.percent));
         });
       })
       .then((completedReport) => {
-        const owner = diagnosisJobOwnerRef.current;
-        if (!completedReport || !owner || !shouldAcceptDiagnosisJobUpdate(
-          owner,
-          sceneGenerationRef.current,
-          selectedSceneIdRef.current,
-          owner.jobId,
-        )) return;
+        if (
+          !completedReport
+          || !capturedOwner
+          || !ownsJob(capturedOwner, capturedOwner.jobId)
+        ) return;
         setDiagnosisReport(completedReport);
         setReportStage("complete");
         setReportProgress(100);

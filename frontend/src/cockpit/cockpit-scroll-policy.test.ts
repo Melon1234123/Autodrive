@@ -26,6 +26,7 @@ function Harness({
     createElement("section", { className: "cockpit-screen", "data-cockpit-screen": "entry" },
       createElement("input", { "aria-label": "scene search" }),
       createElement("button", { type: "button" }, "choose scene"),
+      createElement("div", { "data-lenis-prevent": "" }, "native scroller"),
     ),
     createElement("section", { className: "cockpit-screen", "data-cockpit-screen": "live" }),
     createElement("section", { className: "cockpit-screen", "data-cockpit-screen": "diagnosis" },
@@ -93,7 +94,50 @@ describe("useCockpitScroll", () => {
     act(() => vi.advanceTimersByTime(121));
     fireEvent.wheel(root, { deltaY: 180, cancelable: true });
     expect(scrolls[2]).toHaveBeenCalledTimes(1);
-    expect(onScreenChange).toHaveBeenLastCalledWith("diagnosis");
+    expect(onScreenChange).toHaveBeenLastCalledWith("live");
+  });
+
+  it("keeps the gesture locked after arriving at an expanded diagnosis screen", () => {
+    const { container } = render(createElement(Harness, { reportExpanded: true }));
+    const { root, scrolls } = installCockpitGeometry(container);
+    root.scrollTop = 1000;
+    fireEvent.scroll(root);
+
+    expect(fireEvent.wheel(root, { deltaY: 180, cancelable: true })).toBe(false);
+    expect(scrolls[2]).toHaveBeenCalledTimes(1);
+    root.scrollTop = 2000;
+    fireEvent.scroll(root);
+    act(() => vi.advanceTimersByTime(100));
+
+    const sameGestureDelta = new WheelEvent("wheel", { deltaY: 140, bubbles: true, cancelable: true });
+    expect(root.dispatchEvent(sameGestureDelta)).toBe(false);
+    expect(sameGestureDelta.defaultPrevented).toBe(true);
+    act(() => vi.advanceTimersByTime(100));
+    const continuingGestureDelta = new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true });
+    expect(root.dispatchEvent(continuingGestureDelta)).toBe(false);
+    expect(continuingGestureDelta.defaultPrevented).toBe(true);
+    expect(scrolls[2]).toHaveBeenCalledTimes(1);
+  });
+
+  it("announces the target only after smooth scrolling crosses to that screen", () => {
+    const onScreenChange = vi.fn();
+    const { container } = render(createElement(Harness, { onScreenChange }));
+    const { root, scrolls } = installCockpitGeometry(container);
+    root.scrollTop = 1000;
+    fireEvent.scroll(root);
+    expect(onScreenChange.mock.calls).toEqual([["live"]]);
+
+    fireEvent.wheel(root, { deltaY: 180, cancelable: true });
+    expect(scrolls[2]).toHaveBeenCalledTimes(1);
+    expect(onScreenChange.mock.calls).toEqual([["live"]]);
+
+    root.scrollTop = 1200;
+    fireEvent.scroll(root);
+    expect(onScreenChange.mock.calls).toEqual([["live"]]);
+
+    root.scrollTop = 1600;
+    fireEvent.scroll(root);
+    expect(onScreenChange.mock.calls).toEqual([["live"], ["diagnosis"]]);
   });
 
   it("does not hijack wheel or keyboard events from controls", () => {
@@ -109,7 +153,44 @@ describe("useCockpitScroll", () => {
 
     expect(fireEvent.keyDown(window, { key: "PageDown", cancelable: true })).toBe(false);
     expect(scrolls[1]).toHaveBeenCalledTimes(1);
-    expect(root.hasAttribute("data-report-expanded")).toBe(false);
+    expect(root.hasAttribute("data-report-reading")).toBe(false);
+  });
+
+  it("supports Home and End without hijacking controls or modified and repeated keys", () => {
+    const onScreenChange = vi.fn();
+    const { container } = render(createElement(Harness, { onScreenChange }));
+    const { root, scrolls } = installCockpitGeometry(container);
+    const input = container.querySelector("input")!;
+    const button = container.querySelector("button")!;
+
+    expect(fireEvent.keyDown(window, { key: "End", cancelable: true })).toBe(false);
+    expect(scrolls[2]).toHaveBeenCalledTimes(1);
+    expect(onScreenChange).not.toHaveBeenCalled();
+
+    root.scrollTop = 2000;
+    fireEvent.scroll(root);
+    onScreenChange.mockClear();
+    expect(fireEvent.keyDown(window, { key: "Home", cancelable: true })).toBe(false);
+    expect(scrolls[0]).toHaveBeenCalledTimes(1);
+    expect(onScreenChange).not.toHaveBeenCalled();
+
+    expect(fireEvent.keyDown(input, { key: "Home", cancelable: true })).toBe(true);
+    expect(fireEvent.keyDown(button, { key: "End", cancelable: true })).toBe(true);
+    expect(fireEvent.keyDown(window, { key: "Home", ctrlKey: true, cancelable: true })).toBe(true);
+    expect(fireEvent.keyDown(window, { key: "End", repeat: true, cancelable: true })).toBe(true);
+    expect(scrolls[0]).toHaveBeenCalledTimes(1);
+    expect(scrolls[2]).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores modified, non-cancelable, and Lenis-prevent wheel input", () => {
+    const { container } = render(createElement(Harness));
+    const { root, scrolls } = installCockpitGeometry(container);
+    const lenisPrevent = container.querySelector<HTMLElement>("[data-lenis-prevent]")!;
+
+    expect(fireEvent.wheel(root, { deltaY: 180, ctrlKey: true, cancelable: true })).toBe(true);
+    expect(fireEvent.wheel(root, { deltaY: 180, cancelable: false })).toBe(true);
+    expect(fireEvent.wheel(lenisPrevent, { deltaY: 180, cancelable: true })).toBe(true);
+    expect(scrolls.every((scroll) => scroll.mock.calls.length === 0)).toBe(true);
   });
 
   it("releases native report scrolling until an upward gesture starts at the evidence top", () => {
@@ -119,15 +200,20 @@ describe("useCockpitScroll", () => {
 
     root.scrollTop = 2300;
     fireEvent.scroll(root);
-    expect(root).toHaveAttribute("data-report-expanded", "true");
+    expect(root).toHaveAttribute("data-report-reading", "true");
+    expect(root.hasAttribute("data-report-expanded")).toBe(false);
     expect(fireEvent.wheel(root, { deltaY: -120, cancelable: true })).toBe(true);
     expect(scrolls[1]).not.toHaveBeenCalled();
 
     root.scrollTop = 2000;
     fireEvent.scroll(root);
-    expect(root.hasAttribute("data-report-expanded")).toBe(false);
+    expect(root.hasAttribute("data-report-reading")).toBe(false);
     expect(fireEvent.wheel(root, { deltaY: -120, cancelable: true })).toBe(false);
     expect(scrolls[1]).toHaveBeenCalledTimes(1);
+    expect(onScreenChange).not.toHaveBeenCalledWith("live");
+
+    root.scrollTop = 1400;
+    fireEvent.scroll(root);
     expect(onScreenChange).toHaveBeenLastCalledWith("live");
   });
 });

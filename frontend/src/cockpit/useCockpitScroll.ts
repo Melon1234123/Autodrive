@@ -9,6 +9,8 @@ type CockpitScrollOptions = {
   onScreenChange: (screen: CockpitScreen) => void;
 };
 
+type CockpitKeyboardCommand = CockpitScrollCommand | "first" | "last";
+
 const SCREEN_ORDER: readonly CockpitScreen[] = ["entry", "live", "diagnosis"];
 const WHEEL_GESTURE_SETTLE_MS = 120;
 const WHEEL_GESTURE_EXCLUSION = [
@@ -55,7 +57,7 @@ function excludedWheelTarget(event: WheelEvent, root: HTMLElement) {
   return false;
 }
 
-function keyboardCommand(event: KeyboardEvent): CockpitScrollCommand | null {
+function keyboardCommand(event: KeyboardEvent): CockpitKeyboardCommand | null {
   if (event.defaultPrevented || event.repeat || event.altKey || event.ctrlKey || event.metaKey) return null;
   const target = event.target instanceof Element ? event.target : null;
   if (target?.closest(KEYBOARD_CONTROL_EXCLUSION)) return null;
@@ -65,6 +67,8 @@ function keyboardCommand(event: KeyboardEvent): CockpitScrollCommand | null {
   if (event.key === "ArrowUp" || event.key === "PageUp" || (event.key === " " && event.shiftKey)) {
     return "previous";
   }
+  if (event.key === "Home") return "first";
+  if (event.key === "End") return "last";
   return null;
 }
 
@@ -114,8 +118,8 @@ export function useCockpitScroll({
 
     const syncReportReadingState = () => {
       const reading = reportExpandedRef.current && !reportAtTop();
-      if (reading) root.setAttribute("data-report-expanded", "true");
-      else root.removeAttribute("data-report-expanded");
+      if (reading) root.setAttribute("data-report-reading", "true");
+      else root.removeAttribute("data-report-reading");
     };
 
     const announceScreen = (screen: CockpitScreen) => {
@@ -124,24 +128,24 @@ export function useCockpitScroll({
       onScreenChangeRef.current(screen);
     };
 
-    const navigate = (command: CockpitScrollCommand) => {
+    const navigate = (command: CockpitKeyboardCommand) => {
       const current = currentScreen();
       if (!current) return false;
       const atTop = reportAtTop();
-      if (current === "diagnosis" && reportExpandedRef.current && (command === "next" || !atTop)) {
+      if (
+        (command === "previous" || command === "next") &&
+        current === "diagnosis" && reportExpandedRef.current &&
+        (command === "next" || !atTop)
+      ) {
         return false;
       }
-      const destination = resolveCockpitDestination(
-        command,
-        current,
-        reportExpandedRef.current,
-        atTop,
-      );
+      const destination = command === "first" ? "entry"
+        : command === "last" ? "diagnosis"
+          : resolveCockpitDestination(command, current, reportExpandedRef.current, atTop);
       if (!destination) return true;
       const target = screens.find(({ screen }) => screen === destination)?.element;
       if (!target) return false;
       target.scrollIntoView({ behavior: "smooth", block: "start" });
-      announceScreen(destination);
       return true;
     };
 
@@ -164,13 +168,17 @@ export function useCockpitScroll({
 
       const current = currentScreen();
       const command: CockpitScrollCommand = event.deltaY > 0 ? "next" : "previous";
+      if (wheelGestureActive) {
+        event.preventDefault();
+        holdWheelGesture();
+        return;
+      }
       if (
         current === "diagnosis" && reportExpandedRef.current &&
         (command === "next" || !reportAtTop())
       ) return;
 
       event.preventDefault();
-      if (wheelGestureActive) return;
       holdWheelGesture();
       navigate(command);
     };
@@ -197,7 +205,7 @@ export function useCockpitScroll({
       root.removeEventListener("wheel", handleWheel);
       root.removeEventListener("scroll", handleScroll);
       window.removeEventListener("keydown", handleKeyDown);
-      root.removeAttribute("data-report-expanded");
+      root.removeAttribute("data-report-reading");
     };
   }, [reportRef, rootRef]);
 
@@ -207,7 +215,7 @@ export function useCockpitScroll({
     if (!root) return;
     const anchorTop = anchor ? relativeOffsetTop(anchor, root) : Number.POSITIVE_INFINITY;
     const reading = reportExpanded && root.scrollTop > anchorTop + 1;
-    if (reading) root.setAttribute("data-report-expanded", "true");
-    else root.removeAttribute("data-report-expanded");
+    if (reading) root.setAttribute("data-report-reading", "true");
+    else root.removeAttribute("data-report-reading");
   }, [reportExpanded, reportRef, rootRef]);
 }

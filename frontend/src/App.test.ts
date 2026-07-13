@@ -181,20 +181,44 @@ it("keeps one terrain backdrop mounted while switching views", () => {
   expect(terrain).toHaveAttribute("data-preset", "hidden");
 });
 
-it("mounts the three-screen cockpit with one video and one active evidence workspace", () => {
+it("renders the demo as a visual-only cockpit entry", () => {
+  render(createElement(ProjectSite, {
+    active: true,
+    onOpenDemo: vi.fn(),
+    onTerrainPresetChange: vi.fn(),
+    playOpening: false,
+    onOpeningComplete: vi.fn(),
+  }));
+
+  expect(screen.getByRole("button", { name: "进入驾驶舱" })).toBeInTheDocument();
+  expect(screen.queryByText("DRIVEGUARD / LIVE DEMO")).not.toBeInTheDocument();
+  expect(screen.queryByText("nuScenes mini · 前视视频 · 激光雷达")).not.toBeInTheDocument();
+  expect(screen.queryByText("视频 · 点云 · 地图 · 诊断同步")).not.toBeInTheDocument();
+  expect(screen.queryByText("前视视频")).not.toBeInTheDocument();
+  expect(screen.queryByText("三维点云")).not.toBeInTheDocument();
+  expect(screen.queryByText("AI 诊断")).not.toBeInTheDocument();
+  expect(screen.queryByText("打开后可查看感知框、原始点云、地图轨迹、全域诊断和历史风险事件回放。")).not.toBeInTheDocument();
+  expect(document.querySelector(".mini-map")).not.toBeInTheDocument();
+});
+
+it("mounts the three-screen cockpit with embedded videos and one persistent evidence workspace", () => {
   render(createElement(App));
   enterCockpit();
 
   expect(screen.getByRole("region", { name: "场景入口" })).toBeInTheDocument();
   expect(screen.getByRole("region", { name: "实时解析" })).toBeInTheDocument();
   expect(screen.getByRole("region", { name: "全域诊断" })).toBeInTheDocument();
-  expect(document.querySelectorAll(".cockpit-experience video")).toHaveLength(1);
-  expect(screen.queryByTestId("lidar-bev-mock")).not.toBeInTheDocument();
-  expect(document.querySelector(".map-stage")).not.toBeInTheDocument();
+  expect(document.querySelectorAll(".cockpit-experience video")).toHaveLength(3);
+  const lidar = screen.getByTestId("lidar-bev-mock");
+  const map = document.querySelector(".map-stage");
+  expect(lidar.closest(".cockpit-evidence-parking")).toBeInTheDocument();
+  expect(map?.closest(".cockpit-evidence-parking")).toBeInTheDocument();
 
   activateCockpitScreen("实时解析");
   expect(screen.getAllByTestId("lidar-bev-mock")).toHaveLength(1);
   expect(document.querySelectorAll(".map-stage")).toHaveLength(1);
+  expect(screen.getByTestId("lidar-bev-mock")).toBe(lidar);
+  expect(document.querySelector(".map-stage")).toBe(map);
 });
 
 it("slides from the showcase into the full-screen cockpit and returns on Esc", () => {
@@ -435,7 +459,7 @@ it("clears old scene coordinates until the selected scene perception resolves", 
   enterCockpit();
   activateCockpitScreen("实时解析");
   const sceneSelector = await screen.findByRole("combobox", { name: "选择数据场景" });
-  const mapPanel = document.querySelector(".map-panel") as HTMLElement;
+  const mapPanel = document.querySelector(".cockpit-map-slot") as HTMLElement;
   await waitFor(() => {
     expect(sceneSelector).toHaveValue("scene-a");
     expect(sceneSelector).toBeEnabled();
@@ -601,7 +625,7 @@ describe("scene-owned cockpit async state", () => {
       expect(sceneSelector).toBeEnabled();
       expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-cloud", "present");
       expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-status", "ready");
-      expect(document.querySelector(".map-panel .panel-title strong")).toHaveTextContent("31.10000, 121.50000");
+      expect(document.querySelector(".cockpit-map-slot .panel-title strong")).toHaveTextContent("31.10000, 121.50000");
     });
 
     appTestHarness.lidarSnapshots.length = 0;
@@ -611,7 +635,7 @@ describe("scene-owned cockpit async state", () => {
     expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-cloud", "present");
     expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-status", "ready");
     expect(screen.getByLabelText("LiDAR 数据状态")).toHaveTextContent("已同步");
-    expect(document.querySelector(".map-panel .panel-title strong")).toHaveTextContent("31.10000, 121.50000");
+    expect(document.querySelector(".cockpit-map-slot .panel-title strong")).toHaveTextContent("31.10000, 121.50000");
   });
 
   it("keeps healthy LiDAR available when the telemetry bundle fails", async () => {

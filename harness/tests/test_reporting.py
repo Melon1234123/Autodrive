@@ -31,6 +31,31 @@ def control_only_context():
     return DiagnosisContext.model_validate(payload)
 
 
+def all_source_context():
+    payload = high_risk_context().model_dump(mode="json")
+    perception = payload["bundle"]["perception"][0]
+    perception.update({
+        "imageFile": "samples/CAM_FRONT/source.jpg",
+        "sampleToken": "sample-token",
+        "ego": {"x": 1.0, "y": 2.0, "yaw": 0.1, "latitude": 42.0},
+    })
+    sample_perception = payload["samples"][0]["perception"]["value"]
+    sample_perception.update({
+        "imageFile": "samples/CAM_FRONT/source.jpg",
+        "sampleToken": "sample-token",
+        "ego": {"x": 1.0, "y": 2.0, "yaw": 0.1, "latitude": 42.0},
+    })
+    lidar = {"time": 12.4, "file": "frames/000001.bin", "pointCount": 42}
+    payload["bundle"]["lidar_index"] = [lidar]
+    payload["samples"][0]["lidar"] = {
+        "value": lidar,
+        "provenance": "nearest",
+        "source_times": [12.4],
+    }
+    payload["features"]["provenance"]["ego_pose"] = "real"
+    return DiagnosisContext.model_validate(payload)
+
+
 def test_local_report_is_complete_and_has_no_raw_scene_id():
     report = assemble_report(high_risk_context(
         scene_key="scene-0796", scene_name="城市路口侧向超车"
@@ -41,12 +66,13 @@ def test_local_report_is_complete_and_has_no_raw_scene_id():
     assert report.recommendations
     assert report.regression_tests
     assert report.evidence_index
+    assert report.historical_risk_events == report.timeline
     assert "scene-0796" not in report.model_dump_json()
     assert {item.id for item in report.evidence_index} >= set(report.timeline[0].evidence_ids)
 
 
 def test_analysis_sections_reference_only_matching_evidence_provenance():
-    report = assemble_report(high_risk_context())
+    report = assemble_report(all_source_context())
     evidence = {item.id: item for item in report.evidence_index}
     expected = [
         (report.perception_analysis, "perception", "real-derived"),
@@ -57,8 +83,8 @@ def test_analysis_sections_reference_only_matching_evidence_provenance():
         assert section.evidence_ids
         assert all(evidence[item].source == source for item in section.evidence_ids)
         assert all(evidence[item].provenance == provenance for item in section.evidence_ids)
-    assert {item.source for item in report.evidence_index} >= {
-        "perception", "telemetry", "trajectory",
+    assert {item.source for item in report.evidence_index} == {
+        "camera", "perception", "lidar", "ego_pose", "telemetry", "trajectory",
     }
     assert set(report.timeline[0].evidence_ids) == {
         item.id for item in report.evidence_index
@@ -108,3 +134,20 @@ def test_control_only_episode_does_not_fabricate_perception_or_trajectory_eviden
     assert all(chain.evidence_ids == report.timeline[0].evidence_ids
                for chain in report.causal_chains)
     DiagnosisReport.model_validate(report.model_dump(mode="json"))
+
+
+def test_missing_camera_and_ego_records_do_not_create_false_evidence():
+    context = all_source_context()
+    payload = context.model_dump(mode="json")
+    for row in payload["bundle"]["perception"]:
+        row["imageFile"] = None
+        row["ego"] = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+    for sample in payload["samples"]:
+        sample["perception"]["value"]["imageFile"] = None
+        sample["perception"]["value"]["ego"] = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+    payload["features"]["provenance"].pop("ego_pose", None)
+
+    report = assemble_report(DiagnosisContext.model_validate(payload))
+
+    assert "camera" not in {item.source for item in report.evidence_index}
+    assert "ego_pose" not in {item.source for item in report.evidence_index}

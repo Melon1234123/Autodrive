@@ -202,3 +202,40 @@ def test_manager_evicts_oldest_completed_job_and_its_dedupe_entry(manager_pool):
     assert manager.get(second.job_id) is not None
     replacement = manager.create("default", "v1")
     assert replacement.job_id != first.job_id
+
+
+def test_manager_bounds_many_unique_failed_jobs(manager_pool):
+    def failing_pipeline(_scene_key, _data_version, _progress_callback):
+        raise RuntimeError("fixture failure")
+
+    manager = manager_pool(run_pipeline=failing_pipeline, max_completed=2)
+    records = []
+    for index in range(5):
+        record = manager.create(f"failed-{index}", "v1")
+        wait_for_stage(manager, record.job_id, "failed")
+        records.append(record)
+
+    assert [manager.get(item.job_id) is not None for item in records] == [
+        False, False, False, True, True,
+    ]
+
+
+def test_manager_evicts_oldest_terminal_job_across_complete_and_failed(manager_pool):
+    def mixed_pipeline(scene_key, _data_version, _progress_callback):
+        if scene_key.startswith("failed"):
+            raise RuntimeError("fixture failure")
+        return {"scene_name": scene_key}
+
+    manager = manager_pool(run_pipeline=mixed_pipeline, max_completed=2)
+    completed = manager.create("complete-a", "v1")
+    wait_for_stage(manager, completed.job_id, "complete")
+    failed = manager.create("failed-a", "v1")
+    wait_for_stage(manager, failed.job_id, "failed")
+    latest = manager.create("complete-b", "v1")
+    wait_for_stage(manager, latest.job_id, "complete")
+
+    assert manager.get(completed.job_id) is None
+    assert manager.get(failed.job_id) is not None
+    assert manager.get(latest.job_id) is not None
+    retry = manager.create("complete-a", "v1")
+    assert retry.job_id != completed.job_id

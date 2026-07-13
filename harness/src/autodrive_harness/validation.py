@@ -58,6 +58,36 @@ def validate_bundle(bundle: SceneBundle) -> ValidationResult:
             "perception-missing", "error", ["perception", "trajectory"],
             "感知序列缺失，无法执行目标与轨迹分析。",
         ))
+    if bundle.telemetry and bundle.perception:
+        telemetry_times = sorted(row.time for row in bundle.telemetry)
+        perception_times = sorted(row.time for row in bundle.perception)
+        overlap_start = max(telemetry_times[0], perception_times[0])
+        overlap_end = min(telemetry_times[-1], perception_times[-1])
+        overlap = overlap_end - overlap_start
+        gap = max(
+            0.0,
+            perception_times[0] - telemetry_times[-1],
+            telemetry_times[0] - perception_times[-1],
+        )
+        shortest_span = min(
+            telemetry_times[-1] - telemetry_times[0],
+            perception_times[-1] - perception_times[0],
+        )
+        longest_span = max(
+            telemetry_times[-1] - telemetry_times[0],
+            perception_times[-1] - perception_times[0],
+        )
+        if gap > 1.0:
+            findings.append(_finding(
+                "timeline-skew-excessive", "error", ["telemetry", "perception", "timeline"],
+                "遥测与感知时间轴偏移过大，各分析模块不可评估。",
+            ))
+        elif shortest_span > 0 and overlap < longest_span * 0.25:
+            findings.append(_finding(
+                "timeline-overlap-insufficient", "error",
+                ["telemetry", "perception", "timeline"],
+                "遥测与感知的重叠时间窗不足，各分析模块不可评估。",
+            ))
     _check_monotonic("telemetry", (row.time for row in bundle.telemetry), findings)
     _check_monotonic("perception", (row.time for row in bundle.perception), findings)
     _check_ranges(bundle.telemetry, findings)
@@ -73,7 +103,13 @@ def validate_bundle(bundle: SceneBundle) -> ValidationResult:
         ))
     score = max(0, 100 - sum(QUALITY_PENALTY[item.severity] for item in findings))
     return ValidationResult(
-        usable=bool(bundle.telemetry and bundle.perception),
+        usable=bool(
+            bundle.telemetry
+            and bundle.perception
+            and not any(item.code in {
+                "timeline-overlap-insufficient", "timeline-skew-excessive",
+            } for item in findings)
+        ),
         quality_score=score,
         findings=findings,
     )

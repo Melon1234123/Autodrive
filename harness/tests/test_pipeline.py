@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from autodrive_harness.cli import main
 from autodrive_harness.pipeline import run_scene_diagnosis
 
@@ -61,3 +63,58 @@ def test_pipeline_computes_causal_chains_once(real_catalog, monkeypatch):
     monkeypatch.setattr(pipeline, "build_causal_chains", counted)
     pipeline.run_scene_diagnosis(real_catalog, "default", "test-v1")
     assert calls == ["default"]
+
+
+class BundleCatalog:
+    def __init__(self, bundle):
+        self.bundle = bundle
+
+    def load(self, _scene_key):
+        return self.bundle
+
+
+def degraded_bundle(real_catalog, case):
+    bundle = real_catalog.load("default").model_copy(deep=True)
+    if case == "missing-telemetry":
+        bundle.telemetry = []
+    elif case == "missing-perception":
+        bundle.perception = []
+    elif case == "partial-overlap":
+        cutoff = bundle.telemetry[-1].time - 0.2
+        bundle.perception = [row for row in bundle.perception if row.time >= cutoff]
+    elif case == "excessive-skew":
+        for row in bundle.perception:
+            row.time += 10_000.0
+    return bundle
+
+
+@pytest.mark.parametrize(
+    "case,unavailable",
+    [
+        ("missing-telemetry", ("motion_control_analysis",)),
+        ("missing-perception", ("perception_analysis", "trajectory_analysis")),
+        ("partial-overlap", ("perception_analysis", "motion_control_analysis", "trajectory_analysis")),
+        ("excessive-skew", ("perception_analysis", "motion_control_analysis", "trajectory_analysis")),
+    ],
+)
+def test_pipeline_returns_complete_degraded_report(real_catalog, case, unavailable):
+    stages = []
+    report = run_scene_diagnosis(
+        BundleCatalog(degraded_bundle(real_catalog, case)),
+        "default",
+        f"{case}-v1",
+        stages.append,
+    )
+
+    assert stages[-1].stage == "complete"
+    assert stages[-1].percent == 100
+    assert report.generation_mode == "local-harness"
+    assert report.data_quality
+    assert report.limitations
+    assert report.scores.confidence < 1
+    assert report.historical_risk_events == []
+    for name in unavailable:
+        section = getattr(report, name)
+        assert "不可评估" in section.summary
+        assert section.evidence_ids == []
+        assert all(value is None for value in section.metrics.values())

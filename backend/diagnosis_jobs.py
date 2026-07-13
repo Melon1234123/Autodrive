@@ -48,7 +48,7 @@ class DiagnosisJobManager:
         self._max_completed = max_completed
         self._jobs: Dict[str, DiagnosisJobRecord] = {}
         self._dedupe: Dict[Tuple[str, str], str] = {}
-        self._completed: Deque[str] = deque()
+        self._terminal: Deque[str] = deque()
         self._lock = threading.RLock()
         self._shutdown = False
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="diagnosis")
@@ -143,6 +143,8 @@ class DiagnosisJobManager:
                     record.stage = "failed"
                     record.report = None
                     record.error = "诊断任务执行失败，请检查场景数据后重试。"
+                    self._terminal.append(job_id)
+                    self._evict_terminal()
             return
 
         with self._lock:
@@ -153,12 +155,12 @@ class DiagnosisJobManager:
             record.percent = 100
             record.report = serialized_report
             record.error = None
-            self._completed.append(job_id)
-            self._evict_completed()
+            self._terminal.append(job_id)
+            self._evict_terminal()
 
-    def _evict_completed(self) -> None:
-        while len(self._completed) > self._max_completed:
-            evicted_job_id = self._completed.popleft()
+    def _evict_terminal(self) -> None:
+        while len(self._terminal) > self._max_completed:
+            evicted_job_id = self._terminal.popleft()
             evicted = self._jobs.pop(evicted_job_id, None)
             if evicted is None:
                 continue

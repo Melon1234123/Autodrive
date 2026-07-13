@@ -28,6 +28,7 @@ def main() -> int:
                 "scene_name": report.scene_name,
                 "overall": report.scores.overall,
                 "event_count": len(report.timeline),
+                "historical_event_count": len(report.historical_risk_events),
             }
     output = Path(__file__).parent / "golden" / "summary.json"
     output.parent.mkdir(parents=True, exist_ok=True)

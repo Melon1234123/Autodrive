@@ -40,3 +40,15 @@ def test_validation_reports_control_ranges_without_mutating_source():
     result = validate_bundle(source)
     assert any(item.code == "telemetry-control-out-of-range" for item in result.findings)
     assert source.telemetry[0].brake == 1.5
+
+
+def test_validation_marks_insufficient_overlap_unusable():
+    result = validate_bundle(bundle([0.0, 1.0, 2.0], [1.9, 2.0, 2.1]))
+    assert result.usable is False
+    assert any(item.code == "timeline-overlap-insufficient" for item in result.findings)
+
+
+def test_validation_marks_excessive_modality_skew_unusable():
+    result = validate_bundle(bundle([0.0, 0.1, 0.2], [10.0, 10.1, 10.2]))
+    assert result.usable is False
+    assert any(item.code == "timeline-skew-excessive" for item in result.findings)

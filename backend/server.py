@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from autodrive_harness import DiagnosisProgress, SceneCatalog, run_scene_diagnosis
+from autodrive_harness.enhancement import EnhancementPlan
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +29,7 @@ REPO_ROOT = BACKEND_DIR.parent
 PUBLIC_ROOT = (REPO_ROOT / "frontend" / "public").resolve()
 SCENE_MANIFEST = (PUBLIC_ROOT / "scenes.json").resolve()
 load_dotenv(BACKEND_DIR / ".env")
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -76,7 +79,14 @@ def run_diagnosis_pipeline(
     data_version: str,
     progress_callback: Callable[[DiagnosisProgress], None],
 ):
-    return run_scene_diagnosis(scene_catalog, scene_key, data_version, progress_callback)
+    enhancer = create_report_enhancer() if has_model_credentials() else None
+    return run_scene_diagnosis(
+        scene_catalog,
+        scene_key,
+        data_version,
+        progress_callback,
+        enhancer=enhancer,
+    )
 
 
 diagnosis_jobs = DiagnosisJobManager(run_pipeline=run_diagnosis_pipeline)
@@ -204,6 +214,54 @@ def get_openai_client() -> OpenAI | None:
         return None
 
     return OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL, timeout=4.0, max_retries=0)
+
+
+class OpenAIReportEnhancer:
+    """Requests only a validated ordering/style plan, never report narrative."""
+
+    def __init__(self, client: OpenAI):
+        self._client = client
+
+    def plan(self, local_report: dict[str, Any]) -> dict[str, Any]:
+        allowed = {
+            "finding_ids": [item["id"] for item in local_report["key_findings"]],
+            "recommendation_ids": [item["id"] for item in local_report["recommendations"]],
+        }
+        prompt = (
+            "你只能返回 JSON 排序计划，不得生成、改写或补充任何报告事实。"
+            "严格字段为 style(expert|concise)、emphasized_finding_ids、"
+            "emphasized_recommendation_ids；不得包含其他字段。"
+            f"可用 ID：{json.dumps(allowed, ensure_ascii=False)}"
+        )
+        try:
+            response = self._client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": "你是受约束的结构化报告排序器。"},
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0,
+            )
+            content = response.choices[0].message.content
+            if not isinstance(content, str):
+                raise ValueError("model response content is missing")
+            validated = EnhancementPlan.model_validate(json.loads(content))
+            if not set(validated.emphasized_finding_ids) <= set(allowed["finding_ids"]):
+                raise ValueError("enhancement plan references an unknown finding id")
+            if not set(validated.emphasized_recommendation_ids) <= set(
+                allowed["recommendation_ids"]
+            ):
+                raise ValueError("enhancement plan references an unknown recommendation id")
+            return validated.model_dump(mode="json")
+        except Exception as exc:
+            logger.warning("report enhancement failed: %s", type(exc).__name__)
+            raise
+
+
+def create_report_enhancer() -> OpenAIReportEnhancer | None:
+    client = get_openai_client()
+    return OpenAIReportEnhancer(client) if client is not None else None
 
 
 def normalize_base_url(base_url: str) -> str:

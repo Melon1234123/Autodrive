@@ -66,7 +66,7 @@ def build_causal_chains(
             item.id for item in evidence_index
             if item.source in {"perception", "telemetry"}
         ][:1]
-    elif not context.episodes:
+    elif evidence_index is None and not context.episodes:
         baseline_ids = ["ev-0001"]
     return [CausalChain(
         observation="在可用时间范围内未形成持续风险事件。",

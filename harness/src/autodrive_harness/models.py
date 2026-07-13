@@ -241,6 +241,7 @@ class DiagnosisReport(StrictModel):
     scores: RiskScores
     key_findings: List[Finding]
     timeline: List[RiskEpisode]
+    historical_risk_events: List[RiskEpisode]
     perception_analysis: AnalysisSection
     motion_control_analysis: AnalysisSection
     trajectory_analysis: AnalysisSection

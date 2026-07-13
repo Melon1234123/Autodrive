@@ -80,10 +80,32 @@ def _evidence_for_window(
     evidence: List[EvidenceRef],
 ) -> List[str]:
     evidence_ids: List[str] = []
+    if any(sample.perception.value.imageFile for sample in samples):
+        image_file = next(
+            sample.perception.value.imageFile
+            for sample in samples
+            if sample.perception.value.imageFile
+        )
+        evidence_ids.append(_append_evidence(
+            evidence, "camera", "real", start_time, end_time,
+            f"{label}时间窗内存在真实相机图像样本 {image_file}。",
+        ))
     if any(sample.perception.value.objects for sample in samples):
         evidence_ids.append(_append_evidence(
             evidence, "perception", "real-derived", start_time, end_time,
             f"{label}时间窗内存在感知目标。",
+        ))
+    if any(
+        sample.perception.value.ego.latitude is not None
+        or sample.perception.value.ego.longitude is not None
+        or sample.perception.value.ego.x != 0.0
+        or sample.perception.value.ego.y != 0.0
+        or sample.perception.value.ego.yaw != 0.0
+        for sample in samples
+    ):
+        evidence_ids.append(_append_evidence(
+            evidence, "ego_pose", "real", start_time, end_time,
+            f"{label}时间窗内存在感知记录的真实自车位姿。",
         ))
     if samples:
         evidence_ids.append(_append_evidence(
@@ -258,6 +280,8 @@ def _referenced_evidence_ids(report: DiagnosisReport) -> List[str]:
     references: List[str] = []
     for episode in report.timeline:
         references.extend(episode.evidence_ids)
+    for episode in report.historical_risk_events:
+        references.extend(episode.evidence_ids)
     for finding in report.key_findings:
         references.extend(finding.evidence_ids)
     for section in (
@@ -411,6 +435,7 @@ def assemble_report(
         scores=context.scores,
         key_findings=_key_findings(context, evidence_ids),
         timeline=context.episodes,
+        historical_risk_events=context.episodes,
         perception_analysis=perception_analysis,
         motion_control_analysis=motion_analysis,
         trajectory_analysis=trajectory_analysis,

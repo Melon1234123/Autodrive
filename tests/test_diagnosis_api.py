@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 
 import pytest
@@ -6,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from backend import server
 from backend.diagnosis_jobs import DiagnosisJobManager
+from autodrive_harness.reporting import protected_fingerprint
 
 
 CATALOG_SCENES = (
@@ -172,3 +174,130 @@ def test_app_lifespan_shuts_down_the_active_diagnosis_manager(monkeypatch):
     assert manager.get(created["jobId"]).stage == "complete"
     with pytest.raises(RuntimeError, match="已关闭"):
         manager.create("default", "lifespan-v1")
+
+
+class StaticCatalog:
+    def __init__(self, bundle):
+        self.bundle = bundle
+
+    def load(self, _scene_key):
+        return self.bundle
+
+
+def api_degraded_bundle(case):
+    bundle = server.scene_catalog.load("default").model_copy(deep=True)
+    if case == "missing-telemetry":
+        bundle.telemetry = []
+    elif case == "missing-perception":
+        bundle.perception = []
+    elif case == "partial-overlap":
+        cutoff = bundle.telemetry[-1].time - 0.2
+        bundle.perception = [row for row in bundle.perception if row.time >= cutoff]
+    elif case == "excessive-skew":
+        for row in bundle.perception:
+            row.time += 10_000.0
+    return bundle
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["missing-telemetry", "missing-perception", "partial-overlap", "excessive-skew"],
+)
+def test_api_serializes_complete_degraded_reports(client, monkeypatch, case):
+    monkeypatch.setattr(server, "scene_catalog", StaticCatalog(api_degraded_bundle(case)))
+
+    created = client.post(
+        "/api/v1/diagnoses",
+        json={"sceneKey": "default", "dataVersion": f"api-{case}-v1"},
+    )
+    completed = wait_for_complete(client, created.json()["jobId"])
+
+    assert completed["report"]["generation_mode"] == "local-harness"
+    assert completed["report"]["historical_risk_events"] == []
+    assert completed["report"]["limitations"]
+    assert completed["report"]["data_quality"]
+    json.dumps(completed, ensure_ascii=False)
+
+
+class CompletionResponse:
+    def __init__(self, content):
+        self.choices = [type("Choice", (), {
+            "message": type("Message", (), {"content": content})(),
+        })()]
+
+
+class FakeCompletions:
+    def __init__(self, result):
+        self.result = result
+
+    def create(self, **_kwargs):
+        if isinstance(self.result, Exception):
+            raise self.result
+        return CompletionResponse(self.result)
+
+
+class FakeModelClient:
+    def __init__(self, result):
+        self.chat = type("Chat", (), {"completions": FakeCompletions(result)})()
+
+
+def test_full_scene_pipeline_uses_only_structured_model_plan(monkeypatch):
+    monkeypatch.setattr(server, "OPENAI_API_KEY", "sk-valid-test")
+    monkeypatch.setattr(server, "get_openai_client", lambda: FakeModelClient(json.dumps({
+        "style": "expert",
+        "emphasized_finding_ids": [],
+        "emphasized_recommendation_ids": [],
+    })))
+    local = server.run_scene_diagnosis(server.scene_catalog, "default", "model-test-v1")
+    enhanced = server.run_diagnosis_pipeline("default", "model-test-v1", lambda _item: None)
+
+    assert enhanced.generation_mode == "model-enhanced"
+    assert enhanced.executive_summary == f"专家视图：{local.executive_summary}"
+    assert enhanced.scores == local.scores
+    assert enhanced.timeline == local.timeline
+    assert enhanced.historical_risk_events == local.historical_risk_events
+    assert enhanced.evidence_index == local.evidence_index
+    assert protected_fingerprint(local) != protected_fingerprint(enhanced)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        RuntimeError("offline"),
+        "not-json",
+        json.dumps({"style": "marketing"}),
+        json.dumps({
+            "style": "expert",
+            "emphasized_finding_ids": ["finding-9999"],
+            "emphasized_recommendation_ids": [],
+        }),
+    ],
+)
+def test_full_scene_model_failure_logs_and_returns_complete_local_report(
+    monkeypatch, caplog, failure
+):
+    monkeypatch.setattr(server, "OPENAI_API_KEY", "sk-valid-test")
+    monkeypatch.setattr(server, "get_openai_client", lambda: FakeModelClient(failure))
+    local = server.run_scene_diagnosis(server.scene_catalog, "default", "fallback-test-v1")
+
+    with caplog.at_level(logging.WARNING):
+        result = server.run_diagnosis_pipeline(
+            "default", "fallback-test-v1", lambda _item: None
+        )
+
+    assert result == local
+    assert result.generation_mode == "local-harness"
+    assert "report enhancement failed" in caplog.text
+
+
+def test_absent_model_credentials_skip_full_scene_adapter(monkeypatch):
+    monkeypatch.setattr(server, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(
+        server,
+        "get_openai_client",
+        lambda: (_ for _ in ()).throw(AssertionError("model client must not be created")),
+    )
+
+    report = server.run_diagnosis_pipeline("default", "local-only-v1", lambda _item: None)
+
+    assert report.generation_mode == "local-harness"

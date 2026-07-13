@@ -482,6 +482,16 @@ test("passes desktop visual, pixel, and overlap QA at all required viewports", a
     const monitor = page.getByRole("complementary", { name: "实时监测" });
     await expectDisjoint([videoFrame, evidence]);
     await expectDisjoint([lidarPanel, mapPanel]);
+    const [liveLidarBox, liveMapBox] = await Promise.all([
+      lidarPanel.boundingBox(), mapPanel.boundingBox(),
+    ]);
+    expect(liveLidarBox).not.toBeNull();
+    expect(liveMapBox).not.toBeNull();
+    expect(Math.abs(liveLidarBox!.x - liveMapBox!.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(liveLidarBox!.width - liveMapBox!.width)).toBeLessThanOrEqual(1);
+    expect(liveMapBox!.y).toBeGreaterThanOrEqual(
+      liveLidarBox!.y + liveLidarBox!.height - 1,
+    );
     await expectDisjoint([page.locator(".cockpit-evidence-stack"), monitor]);
     for (const item of [videoFrame, lidarPanel, mapPanel, monitor]) await expectContained(item, viewport);
     const lidarSignal = await screenshotSignal(page.getByTestId("lidar-webgl-canvas"));

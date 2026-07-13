@@ -111,7 +111,7 @@ afterEach(() => {
 });
 
 it("renders three named screens and one website-matched navigation", () => {
-  render(createElement(CockpitExperience, cockpitProps()));
+  const { container } = render(createElement(CockpitExperience, cockpitProps()));
 
   expect(screen.getByRole("region", { name: "场景入口" })).toBeInTheDocument();
   expect(screen.getByRole("region", { name: "实时解析" })).toBeInTheDocument();
@@ -119,6 +119,11 @@ it("renders three named screens and one website-matched navigation", () => {
   expect(screen.getByRole("button", { name: "返回官网" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "联系我们" })).toBeInTheDocument();
   expect(document.querySelectorAll("video")).toHaveLength(1);
+  const liveEvidencePanels = container.querySelectorAll(
+    ".cockpit-live .cockpit-evidence-panel",
+  );
+  expect(liveEvidencePanels).toHaveLength(2);
+  expect(liveEvidencePanels[1]).not.toHaveClass("map-panel");
   expect(screen.queryByText("CAM_FRONT")).not.toBeInTheDocument();
   expect(screen.queryByText("PATH SYNC")).not.toBeInTheDocument();
 });

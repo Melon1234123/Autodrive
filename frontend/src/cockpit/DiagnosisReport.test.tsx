@@ -49,6 +49,16 @@ const reportFixture = {
     evidence_ids: ["ev-0001"],
     control_conflict: true,
   }],
+  historical_risk_events: [{
+    id: "ep-0001",
+    start_time: 11.6,
+    end_time: 13.2,
+    peak_time: 12.48,
+    risk: "high",
+    summary: "已完成场景中的横向交互风险。",
+    evidence_ids: ["ev-0001"],
+    control_conflict: true,
+  }],
   perception_analysis: {
     summary: "目标跟踪连续性下降。",
     metrics: { tracking_continuity: 0.78 },
@@ -105,6 +115,7 @@ it("renders every standard report section in Chinese", () => {
     "数据质量",
     "风险评分",
     "关键发现",
+    "历史风险事件",
     "风险时间线",
     "感知分析",
     "运动与控制分析",
@@ -118,6 +129,20 @@ it("renders every standard report section in Chinese", () => {
   expect(screen.getByText("制动响应偏晚")).toBeInTheDocument();
   expect(screen.getByText("部分时间段点云稀疏。")).toBeInTheDocument();
   expect(screen.getByText("提高横向切入目标的跟踪刷新频率。")).toBeInTheDocument();
+});
+
+it("seeks from a historical risk event without exposing episode ids", () => {
+  const onSeek = vi.fn();
+  const { container } = render(
+    <DiagnosisReportView report={reportFixture} onSeekEvidence={onSeek} />,
+  );
+  const section = screen.getByRole("region", { name: "历史风险事件" });
+
+  fireEvent.click(within(section).getByRole("button", { name: /峰值 12\.48 秒/ }));
+
+  expect(onSeek).toHaveBeenCalledWith(12.48);
+  expect(section).toHaveTextContent("已完成场景中的横向交互风险。");
+  expect(container).not.toHaveTextContent("ep-0001");
 });
 
 it("seeks evidence time without exposing internal identifiers", () => {

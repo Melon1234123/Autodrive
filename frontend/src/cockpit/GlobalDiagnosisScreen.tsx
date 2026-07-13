@@ -55,7 +55,7 @@ export function GlobalDiagnosisScreen({
           <div className="cockpit-evidence-panel cockpit-glass-panel cockpit-mini-panel">
             {active ? lidarSlot : null}
           </div>
-          <div className="cockpit-evidence-panel cockpit-glass-panel cockpit-mini-panel map-panel">
+          <div className="cockpit-evidence-panel cockpit-glass-panel cockpit-mini-panel">
             {active ? mapSlot : null}
           </div>
           <div className="cockpit-diagnosis__action cockpit-glass-panel">{active ? diagnosisSlot : null}</div>

@@ -21,6 +21,7 @@ const report = {
   },
   key_findings: [],
   timeline: [],
+  historical_risk_events: [],
   perception_analysis: { summary: "未发现异常。", metrics: {}, evidence_ids: [] },
   motion_control_analysis: { summary: "未发现异常。", metrics: {}, evidence_ids: [] },
   trajectory_analysis: { summary: "未发现异常。", metrics: {}, evidence_ids: [] },

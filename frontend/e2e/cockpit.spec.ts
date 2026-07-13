@@ -16,7 +16,7 @@ const sceneNames = [
 ] as const;
 
 const reportSections = [
-  "执行摘要", "场景概览", "数据质量", "风险评分", "关键发现", "风险时间线",
+  "执行摘要", "场景概览", "数据质量", "风险评分", "关键发现", "历史风险事件", "风险时间线",
   "感知分析", "运动与控制分析", "轨迹分析", "因果链", "优化建议", "回归测试", "证据索引", "分析限制",
 ] as const;
 
@@ -118,6 +118,22 @@ async function expectDisjoint(locators: Locator[]) {
     for (let right = left + 1; right < boxes.length; right += 1) {
       expect(intersectionArea(boxes[left]!, boxes[right]!)).toBeLessThanOrEqual(1);
     }
+  }
+}
+
+async function expectInside(parent: Locator, children: Locator[]) {
+  const parentBox = await parent.boundingBox();
+  expect(parentBox).not.toBeNull();
+  const boxes = await Promise.all(children.map((child) => child.boundingBox()));
+  boxes.forEach((box) => {
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(parentBox!.x - 1);
+    expect(box!.y).toBeGreaterThanOrEqual(parentBox!.y - 1);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(parentBox!.x + parentBox!.width + 1);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(parentBox!.y + parentBox!.height + 1);
+  });
+  for (let index = 1; index < boxes.length; index += 1) {
+    expect(boxes[index]!.y).toBeGreaterThanOrEqual(boxes[index - 1]!.y + boxes[index - 1]!.height - 1);
   }
 }
 
@@ -465,9 +481,23 @@ test("passes desktop visual, pixel, and overlap QA at all required viewports", a
     await navigateByWheel(page, "diagnosis");
     const diagnosisVideo = page.locator(".cockpit-diagnosis .cockpit-video-frame");
     const diagnosisEvidence = page.locator(".cockpit-diagnosis__evidence");
+    const diagnosisLidar = diagnosisEvidence.locator(":scope > .cockpit-evidence-panel").nth(0);
+    const diagnosisMap = diagnosisEvidence.locator(":scope > .cockpit-evidence-panel").nth(1);
+    const diagnosisAction = diagnosisEvidence.locator(":scope > .cockpit-diagnosis__action");
+    const diagnosisChildren = [diagnosisLidar, diagnosisMap, diagnosisAction];
     await expectDisjoint([diagnosisVideo, diagnosisEvidence]);
+    await expectDisjoint(diagnosisChildren);
+    await expectInside(diagnosisEvidence, diagnosisChildren);
     await expectContained(diagnosisVideo, viewport);
     await expectContained(diagnosisEvidence, viewport);
+    for (const child of diagnosisChildren) await expectContained(child, viewport);
+    const diagnosisLidarSignal = await screenshotSignal(diagnosisLidar.getByTestId("lidar-webgl-canvas"));
+    const diagnosisMapSignal = await bitmapSignal(diagnosisMap.getByLabel("可缩放和平移的局部地图"));
+    expect(diagnosisLidarSignal.width).toBeGreaterThan(0);
+    expect(diagnosisLidarSignal.colors).toBeGreaterThan(2);
+    expect(diagnosisMapSignal.width).toBeGreaterThan(0);
+    expect(diagnosisMapSignal.colors).toBeGreaterThan(4);
+    await expect(diagnosisAction).not.toBeEmpty();
     await page.screenshot({ path: path.join(screenshotRoot, `${slug}-diagnosis.png`), fullPage: false });
 
     await waitForReport(page);

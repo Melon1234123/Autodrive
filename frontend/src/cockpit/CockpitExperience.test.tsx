@@ -42,6 +42,7 @@ const completedReport = {
   scores: { perception: 10, motion: 20, control: 30, trajectory: 40, data_quality: 90, overall: 30, confidence: 0.9 },
   key_findings: [],
   timeline: [],
+  historical_risk_events: [],
   perception_analysis: { summary: "感知稳定。", metrics: {}, evidence_ids: [] },
   motion_control_analysis: { summary: "控制稳定。", metrics: {}, evidence_ids: [] },
   trajectory_analysis: { summary: "轨迹稳定。", metrics: {}, evidence_ids: [] },
@@ -213,4 +214,34 @@ it("scrolls to each completed report once and returns to evidence after a time s
   fireEvent.click(screen.getByRole("button", { name: "12.48 秒" }));
   expect(onSeekReportEvidence).toHaveBeenCalledWith(12.48);
   expect(evidenceScroll).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+});
+
+it("keeps scene selection usable and the video node stable after a media error", () => {
+  vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+  const view = render(createElement(CockpitExperience, cockpitProps()));
+  const video = screen.getByTestId("persistent-scene-video") as HTMLVideoElement;
+
+  fireEvent.error(video);
+  expect(screen.getByRole("alert")).toHaveTextContent("场景视频加载失败");
+  fireEvent.click(screen.getByRole("button", { name: "工区左转跟车" }));
+  expect(onSceneSelect).toHaveBeenCalledWith("scene-0061");
+
+  view.rerender(createElement(CockpitExperience, cockpitProps({
+    selectedSceneKey: "scene-0061",
+    sceneVideoSrc: "/scenes/scene-0061/sample.mp4",
+  })));
+  Object.defineProperty(video, "currentSrc", {
+    configurable: true,
+    value: new URL("/scenes/scene-0061/sample.mp4", window.location.href).href,
+  });
+  Object.defineProperty(video, "readyState", {
+    configurable: true,
+    value: HTMLMediaElement.HAVE_FUTURE_DATA,
+  });
+  fireEvent.canPlay(video);
+
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.getByTestId("persistent-scene-video")).toBe(video);
+  expect(document.querySelectorAll("video")).toHaveLength(1);
 });

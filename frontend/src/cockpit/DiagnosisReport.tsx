@@ -162,6 +162,21 @@ export function DiagnosisReportView({ report, onSeekEvidence }: DiagnosisReportV
         </div>
       </ReportSection>
 
+      <ReportSection title="历史风险事件">
+        <div className="diagnosis-report__list">
+          {report.historical_risk_events.length > 0 ? report.historical_risk_events.map((episode) => (
+            <div key={`history-${episode.id}`} data-tone={episode.risk}>
+              <strong>{episode.summary}</strong>
+              <p>{episode.start_time.toFixed(2)}–{episode.end_time.toFixed(2)} 秒 · {episode.control_conflict ? "存在控制冲突" : "未检出控制冲突"}</p>
+              <button className="diagnosis-report__time" type="button" onClick={() => onSeekEvidence(episode.peak_time)}>
+                <Clock3 size={13} aria-hidden="true" />峰值 {episode.peak_time.toFixed(2)} 秒
+              </button>
+              <EvidenceButtons ids={episode.evidence_ids} report={report} onSeek={onSeekEvidence} />
+            </div>
+          )) : <p>已完成场景中未归档持续风险事件。</p>}
+        </div>
+      </ReportSection>
+
       <ReportSection title="风险时间线">
         <div className="diagnosis-report__list">
           {report.timeline.length > 0 ? report.timeline.map((episode) => (

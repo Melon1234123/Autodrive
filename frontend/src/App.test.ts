@@ -437,6 +437,7 @@ describe("scene-owned cockpit async state", () => {
     scores: { perception: 10, motion: 20, control: 30, trajectory: 40, data_quality: 90, overall: 30, confidence: 0.9 },
     key_findings: [],
     timeline: [],
+    historical_risk_events: [],
     perception_analysis: { summary: "感知稳定。", metrics: {}, evidence_ids: [] },
     motion_control_analysis: { summary: "控制稳定。", metrics: {}, evidence_ids: [] },
     trajectory_analysis: { summary: "轨迹稳定。", metrics: {}, evidence_ids: [] },

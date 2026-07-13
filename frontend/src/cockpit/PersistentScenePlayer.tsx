@@ -1,7 +1,8 @@
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, RefObject } from "react";
 import type { CockpitScreen, VideoGeometry } from "./types";
 import { useVideoGeometry } from "./useVideoGeometry";
+import { transformCoverBox } from "./video-cover-geometry";
 
 export type CameraPerceptionObject = {
   id: string;
@@ -73,7 +74,10 @@ function geometryStyle(geometry: VideoGeometry | null): CSSProperties {
   };
 }
 
-function DetectionOverlay({ objects }: { objects: readonly CameraPerceptionObject[] }) {
+function DetectionOverlay({ objects, slot }: {
+  objects: readonly CameraPerceptionObject[];
+  slot: { width: number; height: number };
+}) {
   return (
     <div
       className="camera-targets"
@@ -83,16 +87,24 @@ function DetectionOverlay({ objects }: { objects: readonly CameraPerceptionObjec
       {objects.map((object, index) => {
         const box = object.cameraBox;
         if (!box || box.imageWidth <= 0 || box.imageHeight <= 0) return null;
+        const visible = transformCoverBox({
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: box.height,
+          sourceWidth: box.imageWidth,
+          sourceHeight: box.imageHeight,
+        }, slot);
         return (
           <span
             className={`camera-target target-${object.risk ?? "unknown"}`}
             key={`${object.id}-${index}`}
             style={{
               position: "absolute",
-              left: `${(box.x / box.imageWidth) * 100}%`,
-              top: `${(box.y / box.imageHeight) * 100}%`,
-              width: `${(box.width / box.imageWidth) * 100}%`,
-              height: `${(box.height / box.imageHeight) * 100}%`,
+              left: visible.left,
+              top: visible.top,
+              width: visible.width,
+              height: visible.height,
             }}
           >
             {object.label ? <em>{object.label}</em> : null}
@@ -120,6 +132,8 @@ export function PersistentScenePlayer({
   const previousSceneRef = useRef(sceneKey);
   const loadGenerationRef = useRef(0);
   const initialSourceRef = useRef(src);
+  const expectedSourceRef = useRef(resolvedSource(src));
+  const [mediaError, setMediaError] = useState<string | null>(null);
   const geometry = useVideoGeometry(slots[activeScreen], scrollRootRef);
 
   // sceneKey is the sole source-transition trigger; src-only renders must leave media state intact.
@@ -132,6 +146,7 @@ export function PersistentScenePlayer({
     const generation = loadGenerationRef.current + 1;
     loadGenerationRef.current = generation;
     const expectedSource = resolvedSource(src);
+    expectedSourceRef.current = expectedSource;
     const handleCanPlay = () => {
       const completedSource = video.currentSrc;
       if (
@@ -141,6 +156,7 @@ export function PersistentScenePlayer({
         || video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
       ) return;
       video.removeEventListener("canplay", handleCanPlay);
+      setMediaError(null);
       revealVideo(freezeRef.current);
       playWithoutUnhandledRejection(video);
     };
@@ -167,6 +183,11 @@ export function PersistentScenePlayer({
         playsInline
         loop
         preload="auto"
+        onError={(event) => {
+          const currentSource = event.currentTarget.currentSrc;
+          if (currentSource && currentSource !== expectedSourceRef.current) return;
+          setMediaError("场景视频加载失败，可切换其他场景重试。");
+        }}
         onTimeUpdate={(event) => onTimeChange?.(event.currentTarget.currentTime)}
         style={{ width: "100%", height: "100%", display: "block", objectFit: "cover" }}
       />
@@ -185,7 +206,12 @@ export function PersistentScenePlayer({
           pointerEvents: "none",
         }}
       />
-      {showDetections ? <DetectionOverlay objects={objects} /> : null}
+      {showDetections && geometry ? (
+        <DetectionOverlay objects={objects} slot={{ width: geometry.width, height: geometry.height }} />
+      ) : null}
+      {mediaError ? (
+        <p className="persistent-player__error" role="alert">{mediaError}</p>
+      ) : null}
     </div>
   );
 }

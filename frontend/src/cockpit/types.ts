@@ -104,6 +104,7 @@ export type DiagnosisReport = {
   scores: RiskScores;
   key_findings: Finding[];
   timeline: RiskEpisode[];
+  historical_risk_events: RiskEpisode[];
   perception_analysis: AnalysisSection;
   motion_control_analysis: AnalysisSection;
   trajectory_analysis: AnalysisSection;

@@ -72,7 +72,7 @@ const drawImage = vi.fn();
 function setMediaCompletion(
   video: HTMLVideoElement,
   source: string,
-  readyState = HTMLMediaElement.HAVE_FUTURE_DATA,
+  readyState: number = HTMLMediaElement.HAVE_FUTURE_DATA,
 ) {
   Object.defineProperty(video, "currentSrc", {
     configurable: true,
@@ -294,4 +294,29 @@ it("absorbs an autoplay rejection after the current scene becomes playable", asy
 
   expect(video.play).toHaveBeenCalledOnce();
   expect(screen.getByTestId("persistent-scene-freeze")).not.toBeVisible();
+});
+
+it("surfaces a scene error, keeps the last frame, and recovers with one video", () => {
+  const { rerender } = render(
+    <Harness activeScreen="live" sceneKey="scene-a" src="/scenes/a.mp4" />,
+  );
+  const video = screen.getByTestId("persistent-scene-video") as HTMLVideoElement;
+  Object.defineProperty(video, "videoWidth", { value: 1280, configurable: true });
+  Object.defineProperty(video, "videoHeight", { value: 720, configurable: true });
+
+  rerender(<Harness activeScreen="live" sceneKey="scene-b" src="/scenes/missing.mp4" />);
+  setMediaCompletion(video, "/scenes/missing.mp4", HTMLMediaElement.HAVE_NOTHING);
+  fireEvent.error(video);
+
+  expect(screen.getByRole("alert")).toHaveTextContent("场景视频加载失败");
+  expect(screen.getByTestId("persistent-scene-freeze")).toBeVisible();
+  expect(document.querySelectorAll("video")).toHaveLength(1);
+
+  rerender(<Harness activeScreen="diagnosis" sceneKey="scene-c" src="/scenes/c.mp4" />);
+  setMediaCompletion(video, "/scenes/c.mp4");
+  fireEvent.canPlay(video);
+
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.getByTestId("persistent-scene-freeze")).not.toBeVisible();
+  expect(document.querySelectorAll("video")).toHaveLength(1);
 });

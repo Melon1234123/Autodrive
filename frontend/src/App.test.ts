@@ -182,15 +182,20 @@ it("keeps one terrain backdrop mounted while switching views", () => {
 });
 
 it("renders the demo as a visual-only cockpit entry", () => {
+  const onOpenDemo = vi.fn();
+
   render(createElement(ProjectSite, {
     active: true,
-    onOpenDemo: vi.fn(),
+    onOpenDemo,
     onTerrainPresetChange: vi.fn(),
     playOpening: false,
     onOpeningComplete: vi.fn(),
   }));
 
-  expect(screen.getByRole("button", { name: "进入驾驶舱" })).toBeInTheDocument();
+  const cockpitButtons = screen.getAllByRole("button", { name: "进入驾驶舱" });
+  expect(cockpitButtons).toHaveLength(1);
+  fireEvent.click(cockpitButtons[0]);
+  expect(onOpenDemo).toHaveBeenCalledTimes(1);
   expect(screen.queryByText("DRIVEGUARD / LIVE DEMO")).not.toBeInTheDocument();
   expect(screen.queryByText("nuScenes mini · 前视视频 · 激光雷达")).not.toBeInTheDocument();
   expect(screen.queryByText("视频 · 点云 · 地图 · 诊断同步")).not.toBeInTheDocument();

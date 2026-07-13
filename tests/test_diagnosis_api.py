@@ -199,11 +199,10 @@ def api_degraded_bundle(case):
     return bundle
 
 
-@pytest.mark.parametrize(
-    "case",
-    ["missing-telemetry", "missing-perception", "partial-overlap", "excessive-skew"],
-)
-def test_api_serializes_complete_degraded_reports(client, monkeypatch, case):
+@pytest.mark.parametrize("case", [
+    "missing-telemetry", "missing-perception", "partial-overlap", "excessive-skew",
+])
+def test_api_serializes_modality_aware_degraded_reports(client, monkeypatch, case):
     monkeypatch.setattr(server, "scene_catalog", StaticCatalog(api_degraded_bundle(case)))
 
     created = client.post(
@@ -216,6 +215,25 @@ def test_api_serializes_complete_degraded_reports(client, monkeypatch, case):
     assert completed["report"]["historical_risk_events"] == []
     assert completed["report"]["limitations"]
     assert completed["report"]["data_quality"]
+    report = completed["report"]
+    sources = {item["source"] for item in report["evidence_index"]}
+    assert report["scores"]["overall"] is None
+    if case == "missing-telemetry":
+        assert "telemetry" not in sources
+        assert report["scores"]["motion"] is None
+        assert report["scores"]["perception"] is not None
+        assert report["perception_analysis"]["metrics"]["object_peak"] > 0
+    elif case == "missing-perception":
+        assert not sources & {"camera", "perception", "ego_pose", "trajectory"}
+        assert report["scores"]["perception"] is None
+        assert report["scores"]["motion"] is not None
+        assert report["motion_control_analysis"]["metrics"]["peak_speed_kmh"] > 0
+    else:
+        assert sources == {
+            "camera", "perception", "lidar", "ego_pose", "telemetry", "trajectory",
+        }
+        assert report["motion_control_analysis"]["metrics"]["peak_speed_kmh"] > 0
+        assert report["perception_analysis"]["metrics"]["object_peak"] > 0
     json.dumps(completed, ensure_ascii=False)
 
 
@@ -301,3 +319,44 @@ def test_absent_model_credentials_skip_full_scene_adapter(monkeypatch):
     report = server.run_diagnosis_pipeline("default", "local-only-v1", lambda _item: None)
 
     assert report.generation_mode == "local-harness"
+
+
+def test_full_scene_enhancer_initialization_failure_is_fail_local(monkeypatch, caplog):
+    monkeypatch.setattr(server, "OPENAI_API_KEY", "sk-valid-test")
+    monkeypatch.setattr(
+        server,
+        "create_report_enhancer",
+        lambda: (_ for _ in ()).throw(RuntimeError("private constructor detail")),
+    )
+    local = server.run_scene_diagnosis(server.scene_catalog, "default", "init-fail-v1")
+
+    with caplog.at_level(logging.WARNING):
+        report = server.run_diagnosis_pipeline("default", "init-fail-v1", lambda _item: None)
+
+    assert report == local
+    assert report.generation_mode == "local-harness"
+    assert "report enhancer initialization failed: RuntimeError" in caplog.text
+    assert "private constructor detail" not in caplog.text
+
+
+def test_api_enhancer_initialization_failure_completes_local_report(
+    client, monkeypatch, caplog
+):
+    monkeypatch.setattr(server, "OPENAI_API_KEY", "sk-valid-test")
+    monkeypatch.setattr(
+        server,
+        "create_report_enhancer",
+        lambda: (_ for _ in ()).throw(RuntimeError("private constructor detail")),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        created = client.post(
+            "/api/v1/diagnoses",
+            json={"sceneKey": "default", "dataVersion": "api-init-fail-v1"},
+        )
+        completed = wait_for_complete(client, created.json()["jobId"])
+
+    assert completed["stage"] == "complete"
+    assert completed["report"]["generation_mode"] == "local-harness"
+    assert "report enhancer initialization failed: RuntimeError" in caplog.text
+    assert "private constructor detail" not in caplog.text

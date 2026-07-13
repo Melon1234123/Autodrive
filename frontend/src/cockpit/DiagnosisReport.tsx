@@ -146,7 +146,7 @@ export function DiagnosisReportView({ report, onSeekEvidence }: DiagnosisReportV
       <ReportSection title="风险评分">
         <dl className="diagnosis-report__scores">
           {Object.entries(report.scores).map(([key, value]) => (
-            <div key={key}><dt>{scoreLabels[key as keyof typeof scoreLabels]}</dt><dd>{key === "confidence" ? `${Math.round(value * 100)}%` : value}</dd></div>
+            <div key={key}><dt>{scoreLabels[key as keyof typeof scoreLabels]}</dt><dd>{value === null ? "不可评估" : key === "confidence" ? `${Math.round(value * 100)}%` : value}</dd></div>
           ))}
         </dl>
       </ReportSection>

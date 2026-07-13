@@ -79,7 +79,15 @@ def run_diagnosis_pipeline(
     data_version: str,
     progress_callback: Callable[[DiagnosisProgress], None],
 ):
-    enhancer = create_report_enhancer() if has_model_credentials() else None
+    enhancer = None
+    if has_model_credentials():
+        try:
+            enhancer = create_report_enhancer()
+        except Exception as exc:
+            logger.warning(
+                "report enhancer initialization failed: %s",
+                type(exc).__name__,
+            )
     return run_scene_diagnosis(
         scene_catalog,
         scene_key,

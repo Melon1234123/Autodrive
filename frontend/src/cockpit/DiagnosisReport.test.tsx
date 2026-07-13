@@ -158,3 +158,23 @@ it("seeks evidence time without exposing internal identifiers", () => {
   expect(container).not.toHaveTextContent("recommendation-0001");
   expect(container).not.toHaveTextContent("internal-scene");
 });
+
+it("renders unavailable degraded score axes as 不可评估", () => {
+  render(<DiagnosisReportView report={{
+    ...reportFixture,
+    scores: {
+      perception: null,
+      motion: 18,
+      control: 7,
+      trajectory: null,
+      data_quality: 70,
+      overall: null,
+      confidence: 0.35,
+    },
+  }} onSeekEvidence={vi.fn()} />);
+
+  const scores = screen.getByRole("region", { name: "风险评分" });
+  expect(within(scores).getAllByText("不可评估")).toHaveLength(3);
+  expect(within(scores).getByText("18")).toBeInTheDocument();
+  expect(within(scores).getByText("35%")).toBeInTheDocument();
+});

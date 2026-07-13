@@ -57,3 +57,19 @@ def test_report_requires_distinct_historical_risk_events_field():
     payload.pop("historical_risk_events")
     with pytest.raises(ValidationError):
         DiagnosisReport.model_validate(payload)
+
+
+def test_degraded_report_allows_nullable_risk_axes_and_overall():
+    payload = minimal_report_payload()
+    payload["scores"].update({
+        "perception": None,
+        "motion": 12,
+        "control": 4,
+        "trajectory": None,
+        "overall": None,
+        "confidence": 0.4,
+    })
+    report = DiagnosisReport.model_validate(payload)
+    assert report.scores.perception is None
+    assert report.scores.motion == 12
+    assert report.scores.overall is None

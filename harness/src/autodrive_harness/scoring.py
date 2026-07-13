@@ -53,3 +53,32 @@ def score_scene(
         overall=overall,
         confidence=round(validation.quality_score / 100.0, 3),
     )
+
+
+def score_independent_modalities(
+    features: SceneFeatures,
+    validation: ValidationResult,
+    *,
+    telemetry_available: bool,
+    perception_available: bool,
+    trajectory_available: bool,
+) -> RiskScores:
+    factual = score_scene(features, [], validation)
+    available_axes = sum([
+        perception_available,
+        telemetry_available,
+        telemetry_available,
+        trajectory_available,
+    ])
+    return RiskScores(
+        perception=factual.perception if perception_available else None,
+        motion=factual.motion if telemetry_available else None,
+        control=factual.control if telemetry_available else None,
+        trajectory=factual.trajectory if trajectory_available else None,
+        data_quality=validation.quality_score,
+        overall=None,
+        confidence=round(
+            validation.quality_score / 100.0 * available_axes / 4.0,
+            3,
+        ),
+    )

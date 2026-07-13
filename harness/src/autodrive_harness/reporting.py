@@ -128,6 +128,8 @@ def _evidence_for_window(
 def prepare_report_context(
     context: DiagnosisContext,
 ) -> Tuple[DiagnosisContext, List[EvidenceRef]]:
+    if not context.validation.usable and not context.samples:
+        return context, _raw_modality_evidence(context)
     evidence: List[EvidenceRef] = []
     episodes: List[RiskEpisode] = []
     for episode in context.episodes:
@@ -148,6 +150,63 @@ def prepare_report_context(
             context.samples, start_time, end_time, "基线", evidence
         )
     return context.model_copy(update={"episodes": episodes}), evidence
+
+
+def _raw_modality_evidence(context: DiagnosisContext) -> List[EvidenceRef]:
+    bundle = context.bundle
+    evidence: List[EvidenceRef] = []
+
+    if bundle.perception:
+        start_time = min(row.time for row in bundle.perception)
+        end_time = max(row.time for row in bundle.perception)
+        image_file = next(
+            (row.imageFile for row in bundle.perception if row.imageFile),
+            None,
+        )
+        if image_file:
+            _append_evidence(
+                evidence, "camera", "real", start_time, end_time,
+                f"原始感知序列存在真实相机图像样本 {image_file}。",
+            )
+        if any(row.objects for row in bundle.perception):
+            _append_evidence(
+                evidence, "perception", "real-derived", start_time, end_time,
+                "原始感知序列存在真实数据推导的目标记录。",
+            )
+        if any(
+            row.ego.latitude is not None
+            or row.ego.longitude is not None
+            or row.ego.x != 0.0
+            or row.ego.y != 0.0
+            or row.ego.yaw != 0.0
+            for row in bundle.perception
+        ):
+            _append_evidence(
+                evidence, "ego_pose", "real", start_time, end_time,
+                "原始感知序列存在真实自车位姿记录。",
+            )
+        if any(row.plannedPath for row in bundle.perception):
+            _append_evidence(
+                evidence, "trajectory", "demo-visualization", start_time, end_time,
+                "原始感知序列存在非空演示计划路径。",
+            )
+
+    if bundle.telemetry:
+        _append_evidence(
+            evidence, "telemetry", "estimated",
+            min(row.time for row in bundle.telemetry),
+            max(row.time for row in bundle.telemetry),
+            "原始遥测序列可用，运动与控制指标由该序列独立计算。",
+        )
+
+    if bundle.lidar_index:
+        _append_evidence(
+            evidence, "lidar", "real",
+            min(row.time for row in bundle.lidar_index),
+            max(row.time for row in bundle.lidar_index),
+            "原始 LiDAR 索引包含真实点云帧引用。",
+        )
+    return evidence
 
 
 def _evidence_ids_by_source(evidence: List[EvidenceRef], source: str) -> List[str]:
@@ -416,14 +475,21 @@ def assemble_report(
 
     description = RAW_SCENE_ID.sub("内部场景", context.bundle.description)
     high_count = sum(episode.risk == "high" for episode in context.episodes)
+    if context.scores.overall is None:
+        executive_summary = (
+            "数据未满足跨模态时间对齐条件，综合风险不可评估；"
+            "报告保留各存活模态可独立验证的指标与证据。"
+        )
+    else:
+        executive_summary = (
+            f"本地确定性分析检出 {len(context.episodes)} 个持续风险事件，"
+            f"其中 {high_count} 个为高风险；综合风险分为 {context.scores.overall}。"
+        )
     report = DiagnosisReport(
         scene_name=context.bundle.scene_name,
         data_version=context.data_version,
         generation_mode="local-harness",
-        executive_summary=(
-            f"本地确定性分析检出 {len(context.episodes)} 个持续风险事件，"
-            f"其中 {high_count} 个为高风险；综合风险分为 {context.scores.overall}。"
-        ),
+        executive_summary=executive_summary,
         scene_overview={
             "description": description,
             "duration_seconds": context.features.duration,

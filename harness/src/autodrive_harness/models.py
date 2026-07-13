@@ -185,12 +185,12 @@ class RiskEpisode(StrictModel):
 
 
 class RiskScores(StrictModel):
-    perception: int = Field(ge=0, le=100)
-    motion: int = Field(ge=0, le=100)
-    control: int = Field(ge=0, le=100)
-    trajectory: int = Field(ge=0, le=100)
+    perception: Optional[int] = Field(ge=0, le=100)
+    motion: Optional[int] = Field(ge=0, le=100)
+    control: Optional[int] = Field(ge=0, le=100)
+    trajectory: Optional[int] = Field(ge=0, le=100)
     data_quality: int = Field(ge=0, le=100)
-    overall: int = Field(ge=0, le=100)
+    overall: Optional[int] = Field(ge=0, le=100)
     confidence: float = Field(ge=0, le=1)
 
 

@@ -30,12 +30,12 @@ export type EvidenceRef = {
 };
 
 export type RiskScores = {
-  perception: number;
-  motion: number;
-  control: number;
-  trajectory: number;
+  perception: number | null;
+  motion: number | null;
+  control: number | null;
+  trajectory: number | null;
   data_quality: number;
-  overall: number;
+  overall: number | null;
   confidence: number;
 };
 

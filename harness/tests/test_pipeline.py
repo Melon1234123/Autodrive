@@ -88,16 +88,10 @@ def degraded_bundle(real_catalog, case):
     return bundle
 
 
-@pytest.mark.parametrize(
-    "case,unavailable",
-    [
-        ("missing-telemetry", ("motion_control_analysis",)),
-        ("missing-perception", ("perception_analysis", "trajectory_analysis")),
-        ("partial-overlap", ("perception_analysis", "motion_control_analysis", "trajectory_analysis")),
-        ("excessive-skew", ("perception_analysis", "motion_control_analysis", "trajectory_analysis")),
-    ],
-)
-def test_pipeline_returns_complete_degraded_report(real_catalog, case, unavailable):
+@pytest.mark.parametrize("case", [
+    "missing-telemetry", "missing-perception", "partial-overlap", "excessive-skew",
+])
+def test_pipeline_returns_complete_modality_aware_degraded_report(real_catalog, case):
     stages = []
     report = run_scene_diagnosis(
         BundleCatalog(degraded_bundle(real_catalog, case)),
@@ -113,8 +107,40 @@ def test_pipeline_returns_complete_degraded_report(real_catalog, case, unavailab
     assert report.limitations
     assert report.scores.confidence < 1
     assert report.historical_risk_events == []
-    for name in unavailable:
-        section = getattr(report, name)
+    assert report.scores.overall is None
+    sources = {item.source for item in report.evidence_index}
+
+    if case == "missing-telemetry":
+        assert sources == {"camera", "perception", "lidar", "ego_pose", "trajectory"}
+        assert report.scores.motion is None
+        assert report.scores.control is None
+        assert report.scores.perception is not None
+        assert report.scores.trajectory is not None
+        assert report.perception_analysis.metrics["object_peak"] > 0
+        assert report.trajectory_analysis.metrics["demo_path_lateral_deviation"] > 0
+        unavailable = (report.motion_control_analysis,)
+    elif case == "missing-perception":
+        assert sources == {"lidar", "telemetry"}
+        assert report.scores.perception is None
+        assert report.scores.trajectory is None
+        assert report.scores.motion is not None
+        assert report.scores.control is not None
+        assert report.motion_control_analysis.metrics["peak_speed_kmh"] > 0
+        assert report.motion_control_analysis.metrics["peak_abs_accel"] > 0
+        unavailable = (report.perception_analysis, report.trajectory_analysis)
+    else:
+        assert sources == {
+            "camera", "perception", "lidar", "ego_pose", "telemetry", "trajectory",
+        }
+        assert all(getattr(report.scores, axis) is not None for axis in (
+            "perception", "motion", "control", "trajectory",
+        ))
+        assert report.perception_analysis.metrics["object_peak"] > 0
+        assert report.motion_control_analysis.metrics["peak_speed_kmh"] > 0
+        assert report.trajectory_analysis.metrics["demo_path_lateral_deviation"] > 0
+        unavailable = ()
+
+    for section in unavailable:
         assert "不可评估" in section.summary
         assert section.evidence_ids == []
         assert all(value is None for value in section.metrics.values())

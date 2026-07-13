@@ -144,3 +144,37 @@ def test_pipeline_returns_complete_modality_aware_degraded_report(real_catalog, 
         assert "不可评估" in section.summary
         assert section.evidence_ids == []
         assert all(value is None for value in section.metrics.values())
+
+
+@pytest.mark.parametrize(
+    "case,missing_label",
+    [("missing-telemetry", "遥测"), ("missing-perception", "感知")],
+)
+def test_degraded_report_never_presents_unexecuted_event_mining_as_negative(
+    real_catalog, case, missing_label
+):
+    report = run_scene_diagnosis(
+        BundleCatalog(degraded_bundle(real_catalog, case)),
+        "default",
+        f"semantic-{case}-v1",
+    )
+
+    assert "综合风险不可评估" in report.executive_summary
+    assert report.key_findings[0].title == "跨模态事件挖掘不可评估"
+    assert "未执行" in report.key_findings[0].summary
+    assert report.causal_chains[0].observation == "跨模态事件挖掘与因果链不可评估。"
+    assert "未执行" in report.causal_chains[0].mechanism
+    assert missing_label in report.recommendations[0].action
+    assert "重新运行" in report.recommendations[0].action
+    assert report.regression_tests[0].name == "跨模态数据恢复复验"
+    assert missing_label in report.regression_tests[0].criterion
+    assert "重新运行" in report.regression_tests[0].criterion
+
+    degraded_semantics = " ".join([
+        *(item.title + item.summary for item in report.key_findings),
+        *(item.observation + item.mechanism for item in report.causal_chains),
+        *(item.action + item.rationale for item in report.recommendations),
+        *(item.name + item.criterion + item.rationale for item in report.regression_tests),
+    ])
+    for false_negative in ("未检出持续风险", "无持续风险", "保持 0 个事件"):
+        assert false_negative not in degraded_semantics

@@ -216,6 +216,17 @@ def _evidence_ids_by_source(evidence: List[EvidenceRef], source: str) -> List[st
 def _key_findings(
     context: DiagnosisContext, baseline_evidence_ids: List[str]
 ) -> List[Finding]:
+    if not context.validation.usable:
+        return [Finding(
+            id="finding-0001",
+            title="跨模态事件挖掘不可评估",
+            summary=(
+                "因跨模态数据不满足时间对齐条件，未执行风险事件挖掘，"
+                "不能将空事件列表解释为无风险结论。"
+            ),
+            severity="info",
+            evidence_ids=baseline_evidence_ids,
+        )]
     if not context.episodes:
         return [Finding(
             id="finding-0001",
@@ -236,6 +247,17 @@ def _key_findings(
 def _recommendations(
     context: DiagnosisContext, evidence: List[EvidenceRef]
 ) -> List[Recommendation]:
+    if not context.validation.usable:
+        recovery_target = _degraded_recovery_target(context)
+        return [Recommendation(
+            id="recommendation-0001",
+            priority="high",
+            action=f"{recovery_target}，恢复跨模态时间对齐后重新运行全场景诊断。",
+            rationale=(
+                "当前仅能保留存活模态的独立指标，不足以执行事件挖掘与因果分析。"
+            ),
+            evidence_ids=[item.id for item in evidence],
+        )]
     recommendations: List[Recommendation] = []
     telemetry_ids = _evidence_ids_by_source(evidence, "telemetry")
     perception_ids = _evidence_ids_by_source(evidence, "perception")
@@ -268,6 +290,15 @@ def _recommendations(
 
 
 def _regression_tests(context: DiagnosisContext) -> List[RegressionRecommendation]:
+    if not context.validation.usable:
+        recovery_target = _degraded_recovery_target(context)
+        return [RegressionRecommendation(
+            name="跨模态数据恢复复验",
+            criterion=(
+                f"{recovery_target}，确认时间对齐可用后重新运行事件挖掘与因果分析。"
+            ),
+            rationale="只有恢复完整跨模态输入，才能对风险事件和因果链进行有效复验。",
+        )]
     tests = [RegressionRecommendation(
         name="风险时间窗稳定性",
         criterion=(
@@ -283,6 +314,20 @@ def _regression_tests(context: DiagnosisContext) -> List[RegressionRecommendatio
             rationale="直接覆盖本场景已观测的控制冲突。",
         ))
     return tests
+
+
+def _degraded_recovery_target(context: DiagnosisContext) -> str:
+    codes = {item.code for item in context.validation.findings}
+    missing = []
+    if "telemetry-missing" in codes:
+        missing.append("遥测")
+    if "perception-missing" in codes:
+        missing.append("感知")
+    if missing:
+        return f"补齐{'与'.join(missing)}数据"
+    if "timeline-skew-excessive" in codes:
+        return "校正遥测与感知的时钟偏移"
+    return "修复遥测与感知的有效重叠时间窗"
 
 
 def _data_quality(

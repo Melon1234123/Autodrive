@@ -21,6 +21,19 @@ def build_causal_chains(
         item.id: item for item in (evidence_index or [])
     }
 
+    if not context.validation.usable:
+        available_ids = [
+            item.id for item in (evidence_index or [])
+            if item.source in {"perception", "telemetry"}
+        ][:1]
+        return [CausalChain(
+            observation="跨模态事件挖掘与因果链不可评估。",
+            mechanism="未执行：跨模态数据不满足时间对齐条件。",
+            possible_impact="恢复缺失数据并重新运行后，才能评估事件与因果关系。",
+            evidence_ids=available_ids,
+            confidence=context.scores.confidence,
+        )]
+
     def source_ids(episode_ids: List[str], source: str) -> List[str]:
         if evidence:
             return [item for item in episode_ids if evidence[item].source == source]

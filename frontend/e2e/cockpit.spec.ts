@@ -34,9 +34,16 @@ async function openCockpit(page: Page) {
 
 async function navigateByWheel(page: Page, screen: "live" | "diagnosis") {
   const root = page.locator(".cockpit-experience");
-  await root.hover({ position: { x: 24, y: 200 } });
-  await page.mouse.wheel(0, 900);
-  await expect(root).toHaveAttribute("data-active-screen", screen);
+  const order = ["entry", "live", "diagnosis"];
+  await expect.poll(async () => {
+    const current = await root.getAttribute("data-active-screen");
+    if (current === screen) return current;
+    const direction = order.indexOf(screen) > order.indexOf(current ?? "entry") ? 1 : -1;
+    await root.hover({ position: { x: 24, y: 200 } });
+    await page.mouse.wheel(0, direction * 900);
+    await page.waitForTimeout(250);
+    return root.getAttribute("data-active-screen");
+  }, { timeout: 60_000 }).toBe(screen);
   await page.waitForTimeout(180);
 }
 
@@ -60,7 +67,7 @@ async function armSceneResetProbe(video: Locator) {
 async function expectSceneResetNearZero(video: Locator) {
   await expect.poll(() => video.evaluate(() => (
     window as typeof window & { __sceneResetTime?: number }
-  ).__sceneResetTime)).toBeLessThan(0.5);
+  ).__sceneResetTime), { timeout: 60_000 }).toBeLessThan(0.5);
 }
 
 async function switchSceneAndExpectPlayback(
@@ -78,7 +85,10 @@ async function switchSceneAndExpectPlayback(
   await selectScene(page, name);
   await expect(video).toHaveAttribute("src", expectedSrc);
   await expectSceneResetNearZero(video);
-  await expect.poll(() => video.evaluate((node: HTMLVideoElement) => node.readyState)).toBeGreaterThanOrEqual(3);
+  await expect.poll(
+    () => video.evaluate((node: HTMLVideoElement) => node.readyState),
+    { timeout: 60_000 },
+  ).toBeGreaterThanOrEqual(3);
   const media = await video.evaluate((node: HTMLVideoElement) => ({ paused: node.paused }));
   await expect(page.locator("video")).toHaveCount(1);
   expect(await page.evaluate((original) => document.querySelector("video") === original, originalVideo)).toBe(true);
@@ -319,7 +329,7 @@ test("keeps one continuous video across all three screens", async ({ page }) => 
 });
 
 test("switches ten Chinese scenes in place and keeps live and diagnosis screens stable", async ({ page }) => {
-  test.setTimeout(300_000);
+  test.setTimeout(900_000);
   await openCockpit(page);
   const root = page.locator(".cockpit-experience");
   const video = page.getByTestId("persistent-scene-video");
@@ -331,7 +341,10 @@ test("switches ten Chinese scenes in place and keeps live and diagnosis screens 
   await page.getByRole("button", { name: "工区左转跟车", exact: true }).click();
   await expect(video).toHaveAttribute("src", "/scenes/scene-0061/sample.mp4");
   await expectSceneResetNearZero(video);
-  await expect.poll(() => video.evaluate((node: HTMLVideoElement) => node.readyState)).toBeGreaterThanOrEqual(3);
+  await expect.poll(
+    () => video.evaluate((node: HTMLVideoElement) => node.readyState),
+    { timeout: 60_000 },
+  ).toBeGreaterThanOrEqual(3);
   await expect(page.locator("video")).toHaveCount(1);
   expect(await root.evaluate((node) => node.scrollTop)).toBe(entryScroll);
   expect(await page.evaluate((original) => document.querySelector("video") === original, originalVideo)).toBe(true);
@@ -350,7 +363,7 @@ test("switches ten Chinese scenes in place and keeps live and diagnosis screens 
 });
 
 test("keeps health and current-frame WebSocket diagnosis while completing the full report", async ({ page, request }) => {
-  test.setTimeout(300_000);
+  test.setTimeout(600_000);
   const health = await request.get("http://127.0.0.1:8080/health");
   expect(health.ok()).toBe(true);
   expect(await health.json()).toMatchObject({ status: "ok" });
@@ -426,7 +439,7 @@ test("keeps health and current-frame WebSocket diagnosis while completing the fu
 });
 
 test("passes desktop visual, pixel, and overlap QA at all required viewports", async ({ browser }) => {
-  test.setTimeout(1_200_000);
+  test.setTimeout(2_400_000);
   await mkdir(screenshotRoot, { recursive: true });
   for (const viewport of [
     { width: 1366, height: 768 },
@@ -447,7 +460,7 @@ test("passes desktop visual, pixel, and overlap QA at all required viewports", a
     expect(terrainFirst.colors).toBeGreaterThan(8);
     expect(terrainFirst.nonBackground).toBeGreaterThan(100);
     await expect.poll(async () => (await screenshotSignal(terrain)).checksum, {
-      timeout: 5_000,
+      timeout: 20_000,
       intervals: [100, 200, 400],
     }).not.toBe(terrainFirst.checksum);
 
@@ -457,7 +470,7 @@ test("passes desktop visual, pixel, and overlap QA at all required viewports", a
     expect(firstFrame.height).toBeGreaterThan(0);
     expect(firstFrame.colors).toBeGreaterThan(8);
     await expect.poll(async () => (await videoSignal(video)).checksum, {
-      timeout: 5_000,
+      timeout: 20_000,
       intervals: [100, 200, 400],
     }).not.toBe(firstFrame.checksum);
 

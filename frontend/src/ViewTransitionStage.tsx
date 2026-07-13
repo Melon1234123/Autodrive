@@ -1,4 +1,3 @@
-import { useRef } from "react";
 import type { ReactNode, TransitionEvent } from "react";
 
 export type ViewTransitionPhase = "site" | "entering" | "cockpit" | "exiting";
@@ -16,16 +15,12 @@ export function ViewTransitionStage({
   cockpit,
   onTransitionComplete,
 }: ViewTransitionStageProps) {
-  const completedPhaseRef = useRef<ViewTransitionPhase | null>(null);
-
   const handleLayerTransitionEnd = (event: TransitionEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget || event.propertyName !== "transform") return;
-    if (phase !== "entering" && phase !== "exiting") return;
-    if (completedPhaseRef.current === phase) return;
-
-    completedPhaseRef.current = phase;
     onTransitionComplete(phase);
   };
+
+  const transitionTarget = phase === "entering" ? "cockpit" : phase === "exiting" ? "site" : null;
 
   const siteActive = phase === "site" || phase === "exiting";
   const cockpitActive = phase !== "site";
@@ -47,7 +42,7 @@ export function ViewTransitionStage({
         data-interactive={siteInteractive}
         aria-hidden={!siteInteractive}
         inert={!siteInteractive}
-        onTransitionEnd={handleLayerTransitionEnd}
+        onTransitionEnd={transitionTarget === "site" ? handleLayerTransitionEnd : undefined}
       >
         {site}
       </div>
@@ -59,7 +54,7 @@ export function ViewTransitionStage({
         data-interactive={cockpitInteractive}
         aria-hidden={!cockpitInteractive}
         inert={!cockpitInteractive}
-        onTransitionEnd={handleLayerTransitionEnd}
+        onTransitionEnd={transitionTarget === "cockpit" ? handleLayerTransitionEnd : undefined}
       >
         {cockpit}
       </div>

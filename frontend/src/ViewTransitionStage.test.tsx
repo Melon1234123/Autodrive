@@ -24,22 +24,40 @@ describe("ViewTransitionStage", () => {
     expect(screen.getByTestId("view-layer-cockpit")).toHaveAttribute("aria-hidden", "true");
   });
 
-  it.each(["entering", "exiting"] as const)("reports one completion for the layer transform in %s", (phase) => {
+  it("completes entering only from the cockpit layer", () => {
     const onTransitionComplete = vi.fn();
     render(
       createElement(ViewTransitionStage, {
-        phase,
+        phase: "entering",
         site: createElement("div"),
         cockpit: createElement("div"),
         onTransitionComplete,
       }),
     );
 
-    fireEvent.transitionEnd(screen.getByTestId("view-layer-site"), { propertyName: "transform" });
     fireEvent.transitionEnd(screen.getByTestId("view-layer-cockpit"), { propertyName: "transform" });
 
     expect(onTransitionComplete).toHaveBeenCalledTimes(1);
-    expect(onTransitionComplete).toHaveBeenCalledWith(phase);
+    expect(onTransitionComplete).toHaveBeenCalledWith("entering");
+  });
+
+  it("completes exiting only from the site layer", () => {
+    const onTransitionComplete = vi.fn();
+    render(
+      createElement(ViewTransitionStage, {
+        phase: "exiting",
+        site: createElement("div"),
+        cockpit: createElement("div"),
+        onTransitionComplete,
+      }),
+    );
+
+    fireEvent.transitionEnd(screen.getByTestId("view-layer-cockpit"), { propertyName: "transform" });
+    expect(onTransitionComplete).not.toHaveBeenCalled();
+
+    fireEvent.transitionEnd(screen.getByTestId("view-layer-site"), { propertyName: "transform" });
+    expect(onTransitionComplete).toHaveBeenCalledTimes(1);
+    expect(onTransitionComplete).toHaveBeenCalledWith("exiting");
   });
 
   it("ignores stage, child, and unrelated transition events", () => {
@@ -55,10 +73,55 @@ describe("ViewTransitionStage", () => {
 
     fireEvent.transitionEnd(screen.getByTestId("view-transition-stage"), { propertyName: "transform" });
     fireEvent.transitionEnd(screen.getByTestId("site-child"), { propertyName: "transform" });
+    fireEvent.transitionEnd(screen.getByTestId("view-layer-site"), { propertyName: "transform" });
     fireEvent.transitionEnd(screen.getByTestId("view-transition-stage"), { propertyName: "opacity" });
     fireEvent.transitionEnd(screen.getByTestId("view-layer-site"), { propertyName: "opacity" });
 
     expect(onTransitionComplete).not.toHaveBeenCalled();
+  });
+
+  it("can complete entering again after returning to the stable site phase", () => {
+    const onTransitionComplete = vi.fn();
+    const { rerender } = render(
+      createElement(ViewTransitionStage, {
+        phase: "entering",
+        site: createElement("div"),
+        cockpit: createElement("div"),
+        onTransitionComplete,
+      }),
+    );
+
+    fireEvent.transitionEnd(screen.getByTestId("view-layer-cockpit"), { propertyName: "transform" });
+    rerender(createElement(ViewTransitionStage, {
+      phase: "cockpit",
+      site: createElement("div"),
+      cockpit: createElement("div"),
+      onTransitionComplete,
+    }));
+    rerender(createElement(ViewTransitionStage, {
+      phase: "exiting",
+      site: createElement("div"),
+      cockpit: createElement("div"),
+      onTransitionComplete,
+    }));
+    fireEvent.transitionEnd(screen.getByTestId("view-layer-site"), { propertyName: "transform" });
+    rerender(createElement(ViewTransitionStage, {
+      phase: "site",
+      site: createElement("div"),
+      cockpit: createElement("div"),
+      onTransitionComplete,
+    }));
+    rerender(createElement(ViewTransitionStage, {
+      phase: "entering",
+      site: createElement("div"),
+      cockpit: createElement("div"),
+      onTransitionComplete,
+    }));
+    fireEvent.transitionEnd(screen.getByTestId("view-layer-cockpit"), { propertyName: "transform" });
+
+    expect(onTransitionComplete).toHaveBeenNthCalledWith(1, "entering");
+    expect(onTransitionComplete).toHaveBeenNthCalledWith(2, "exiting");
+    expect(onTransitionComplete).toHaveBeenNthCalledWith(3, "entering");
   });
 
   it("marks every non-current layer inert while preserving ARIA and pointer state", () => {

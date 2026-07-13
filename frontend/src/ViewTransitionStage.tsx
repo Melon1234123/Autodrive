@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import type { ReactNode, TransitionEvent } from "react";
 
 export type ViewTransitionPhase = "site" | "entering" | "cockpit" | "exiting";
@@ -15,9 +16,15 @@ export function ViewTransitionStage({
   cockpit,
   onTransitionComplete,
 }: ViewTransitionStageProps) {
-  const handleTransitionEnd = (event: TransitionEvent<HTMLDivElement>) => {
+  const completedPhaseRef = useRef<ViewTransitionPhase | null>(null);
+
+  const handleLayerTransitionEnd = (event: TransitionEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget || event.propertyName !== "transform") return;
-    if (phase === "entering" || phase === "exiting") onTransitionComplete(phase);
+    if (phase !== "entering" && phase !== "exiting") return;
+    if (completedPhaseRef.current === phase) return;
+
+    completedPhaseRef.current = phase;
+    onTransitionComplete(phase);
   };
 
   const siteActive = phase === "site" || phase === "exiting";
@@ -31,7 +38,6 @@ export function ViewTransitionStage({
       className={`view-transition-stage view-transition-stage--${phase}`}
       data-testid="view-transition-stage"
       data-view-transition-phase={phase}
-      onTransitionEnd={handleTransitionEnd}
     >
       <div
         className="view-transition-stage__layer view-transition-stage__layer--site"
@@ -40,6 +46,8 @@ export function ViewTransitionStage({
         data-active={siteActive}
         data-interactive={siteInteractive}
         aria-hidden={!siteInteractive}
+        inert={!siteInteractive}
+        onTransitionEnd={handleLayerTransitionEnd}
       >
         {site}
       </div>
@@ -50,6 +58,8 @@ export function ViewTransitionStage({
         data-active={cockpitActive}
         data-interactive={cockpitInteractive}
         aria-hidden={!cockpitInteractive}
+        inert={!cockpitInteractive}
+        onTransitionEnd={handleLayerTransitionEnd}
       >
         {cockpit}
       </div>

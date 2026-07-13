@@ -24,7 +24,7 @@ describe("ViewTransitionStage", () => {
     expect(screen.getByTestId("view-layer-cockpit")).toHaveAttribute("aria-hidden", "true");
   });
 
-  it.each(["entering", "exiting"] as const)("reports completion for %s", (phase) => {
+  it.each(["entering", "exiting"] as const)("reports one completion for the layer transform in %s", (phase) => {
     const onTransitionComplete = vi.fn();
     render(
       createElement(ViewTransitionStage, {
@@ -35,24 +35,56 @@ describe("ViewTransitionStage", () => {
       }),
     );
 
-    fireEvent.transitionEnd(screen.getByTestId("view-transition-stage"), { propertyName: "transform" });
+    fireEvent.transitionEnd(screen.getByTestId("view-layer-site"), { propertyName: "transform" });
+    fireEvent.transitionEnd(screen.getByTestId("view-layer-cockpit"), { propertyName: "transform" });
 
+    expect(onTransitionComplete).toHaveBeenCalledTimes(1);
     expect(onTransitionComplete).toHaveBeenCalledWith(phase);
   });
 
-  it("ignores unrelated transition properties", () => {
+  it("ignores stage, child, and unrelated transition events", () => {
     const onTransitionComplete = vi.fn();
     render(
       createElement(ViewTransitionStage, {
         phase: "entering",
-        site: createElement("div"),
+        site: createElement("div", null, createElement("button", { "data-testid": "site-child" })),
         cockpit: createElement("div"),
         onTransitionComplete,
       }),
     );
 
+    fireEvent.transitionEnd(screen.getByTestId("view-transition-stage"), { propertyName: "transform" });
+    fireEvent.transitionEnd(screen.getByTestId("site-child"), { propertyName: "transform" });
     fireEvent.transitionEnd(screen.getByTestId("view-transition-stage"), { propertyName: "opacity" });
+    fireEvent.transitionEnd(screen.getByTestId("view-layer-site"), { propertyName: "opacity" });
 
     expect(onTransitionComplete).not.toHaveBeenCalled();
+  });
+
+  it("marks every non-current layer inert while preserving ARIA and pointer state", () => {
+    const { rerender } = render(
+      createElement(ViewTransitionStage, {
+        phase: "site",
+        site: createElement("button"),
+        cockpit: createElement("button"),
+        onTransitionComplete: vi.fn(),
+      }),
+    );
+
+    expect(screen.getByTestId("view-layer-site")).not.toHaveAttribute("inert");
+    expect(screen.getByTestId("view-layer-cockpit")).toHaveAttribute("inert");
+    expect(screen.getByTestId("view-layer-cockpit")).toHaveAttribute("aria-hidden", "true");
+
+    rerender(
+      createElement(ViewTransitionStage, {
+        phase: "entering",
+        site: createElement("button"),
+        cockpit: createElement("button"),
+        onTransitionComplete: vi.fn(),
+      }),
+    );
+
+    expect(screen.getByTestId("view-layer-site")).toHaveAttribute("inert");
+    expect(screen.getByTestId("view-layer-cockpit")).toHaveAttribute("inert");
   });
 });

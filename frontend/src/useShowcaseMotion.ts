@@ -18,6 +18,7 @@ type ShowcaseMotionOptions = {
   rootRef: RefObject<HTMLElement | null>;
   playOpening: boolean;
   onOpeningComplete: () => void;
+  enabled?: boolean;
 };
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
@@ -49,13 +50,14 @@ function subscribeToMediaQuery(query: MediaQueryList | null, listener: () => voi
   return () => query.removeListener(listener);
 }
 
-export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: ShowcaseMotionOptions) {
+export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete, enabled = true }: ShowcaseMotionOptions) {
   const playOnMountRef = useRef(playOpening);
   const completeRef = useRef(onOpeningComplete);
   const openingResolvedRef = useRef(false);
   completeRef.current = onOpeningComplete;
 
   useLayoutEffect(() => {
+    if (!enabled) return;
     const root = rootRef.current;
     if (!root) return;
     const opening = root.querySelector<HTMLElement>("[data-motion-opening]");
@@ -393,5 +395,5 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete }: S
       disposeRuntime?.();
       disposeRuntime = null;
     };
-  }, [rootRef]);
+  }, [enabled, rootRef]);
 }

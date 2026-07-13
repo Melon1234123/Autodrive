@@ -110,6 +110,11 @@ function activateCockpitScreen(screenName: "实时解析" | "全域诊断") {
   fireEvent.scroll(root);
 }
 
+function enterCockpit() {
+  fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+  fireEvent.transitionEnd(screen.getByTestId("view-layer-cockpit"), { propertyName: "transform" });
+}
+
 class WebSocketMock {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
@@ -167,17 +172,18 @@ it("keeps one terrain backdrop mounted while switching views", () => {
   expect(terrain).toHaveAttribute("data-view", "showcase");
   expect(terrain).toHaveAttribute("data-preset", "hidden");
   expect(terrain).toHaveAttribute("data-risk", "unknown");
-  fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+  enterCockpit();
   expect(screen.getByTestId("terrain-backdrop-mock")).toBe(terrain);
   expect(terrain).toHaveAttribute("data-view", "dashboard");
   fireEvent.click(screen.getByRole("button", { name: "返回官网" }));
+  fireEvent.transitionEnd(screen.getByTestId("view-layer-site"), { propertyName: "transform" });
   expect(screen.getByTestId("terrain-backdrop-mock")).toBe(terrain);
   expect(terrain).toHaveAttribute("data-preset", "hidden");
 });
 
 it("mounts the three-screen cockpit with one video and one active evidence workspace", () => {
   render(createElement(App));
-  fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+  enterCockpit();
 
   expect(screen.getByRole("region", { name: "场景入口" })).toBeInTheDocument();
   expect(screen.getByRole("region", { name: "实时解析" })).toBeInTheDocument();
@@ -189,6 +195,47 @@ it("mounts the three-screen cockpit with one video and one active evidence works
   activateCockpitScreen("实时解析");
   expect(screen.getAllByTestId("lidar-bev-mock")).toHaveLength(1);
   expect(document.querySelectorAll(".map-stage")).toHaveLength(1);
+});
+
+it("slides from the showcase into the full-screen cockpit and returns on Esc", () => {
+  render(createElement(App));
+  const entry = screen.getByRole("button", { name: /进入效果展示/ });
+  fireEvent.click(entry);
+
+  const stage = screen.getByTestId("view-transition-stage");
+  expect(stage).toHaveAttribute("data-view-transition-phase", "entering");
+  fireEvent.transitionEnd(screen.getByTestId("view-layer-cockpit"), { propertyName: "transform" });
+  expect(stage).toHaveAttribute("data-view-transition-phase", "cockpit");
+  expect(screen.getByRole("region", { name: "场景入口" })).toBeInTheDocument();
+
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(stage).toHaveAttribute("data-view-transition-phase", "exiting");
+  fireEvent.transitionEnd(screen.getByTestId("view-layer-site"), { propertyName: "transform" });
+  expect(stage).toHaveAttribute("data-view-transition-phase", "site");
+  expect(screen.getByRole("button", { name: /进入效果展示/ })).toBeInTheDocument();
+});
+
+it("does not accept a second enter request while the stage is transitioning", () => {
+  render(createElement(App));
+  const entry = screen.getByRole("button", { name: /进入效果展示/ });
+  fireEvent.click(entry);
+  fireEvent.click(entry);
+  expect(screen.getByTestId("view-transition-stage")).toHaveAttribute(
+    "data-view-transition-phase",
+    "entering",
+  );
+});
+
+it("returns to the contact section only after the cockpit exit completes", async () => {
+  render(createElement(App));
+  enterCockpit();
+
+  fireEvent.click(screen.getByRole("button", { name: "联系我们" }));
+  expect(screen.getByTestId("view-transition-stage")).toHaveAttribute("data-view-transition-phase", "exiting");
+  expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+
+  fireEvent.transitionEnd(screen.getByTestId("view-layer-site"), { propertyName: "transform" });
+  await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" }));
 });
 
 describe("cockpit replay integration", () => {
@@ -306,13 +353,14 @@ it("attaches the map resize observer when the cockpit canvas mounts", () => {
     target as Element
   ).classList.contains("map-stage")))).toBe(false);
 
-  fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+  enterCockpit();
   activateCockpitScreen("实时解析");
   const mapStage = document.querySelector(".map-stage");
   const mapObserver = resizeObserverInstances.find((observer) => observer.observe.mock.calls.some(([target]) => target === mapStage));
 
   expect(mapObserver).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "返回官网" }));
+  fireEvent.transitionEnd(screen.getByTestId("view-layer-site"), { propertyName: "transform" });
   expect(mapObserver?.disconnect).toHaveBeenCalledOnce();
 });
 
@@ -384,7 +432,7 @@ it("clears old scene coordinates until the selected scene perception resolves", 
   vi.stubGlobal("fetch", fetchMock);
 
   render(createElement(App));
-  fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+  enterCockpit();
   activateCockpitScreen("实时解析");
   const sceneSelector = await screen.findByRole("combobox", { name: "选择数据场景" });
   const mapPanel = document.querySelector(".map-panel") as HTMLElement;
@@ -519,7 +567,7 @@ describe("scene-owned cockpit async state", () => {
     vi.stubGlobal("fetch", createSceneFetch({ withLidar: true }));
 
     render(createElement(App));
-    fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+    enterCockpit();
     activateCockpitScreen("实时解析");
     const sceneSelector = await screen.findByRole("combobox", { name: "选择数据场景" });
     await waitFor(() => {
@@ -545,7 +593,7 @@ describe("scene-owned cockpit async state", () => {
     vi.stubGlobal("fetch", createSceneFetch({ withLidar: true }));
 
     render(createElement(App));
-    fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+    enterCockpit();
     activateCockpitScreen("实时解析");
     const sceneSelector = await screen.findByRole("combobox", { name: "选择数据场景" });
     await waitFor(() => {
@@ -574,7 +622,7 @@ describe("scene-owned cockpit async state", () => {
     vi.stubGlobal("fetch", createSceneFetch({ withLidar: true, sceneATelemetry: pendingTelemetry }));
 
     render(createElement(App));
-    fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+    enterCockpit();
     activateCockpitScreen("实时解析");
     await waitFor(() => {
       expect(screen.getByRole("combobox", { name: "选择数据场景" })).toHaveValue("scene-a");
@@ -597,7 +645,7 @@ describe("scene-owned cockpit async state", () => {
     vi.stubGlobal("fetch", createSceneFetch({ withLidar: false }));
 
     render(createElement(App));
-    fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+    enterCockpit();
     activateCockpitScreen("全域诊断");
     const sceneSelector = await screen.findByRole("combobox", { name: "选择数据场景" });
     await waitFor(() => {
@@ -664,7 +712,7 @@ describe("scene-owned cockpit async state", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(createElement(App));
-    fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+    enterCockpit();
     activateCockpitScreen("全域诊断");
     const sceneSelector = await screen.findByRole("combobox", { name: "选择数据场景" });
     await waitFor(() => expect(sceneSelector).toHaveValue("scene-a"));
@@ -727,7 +775,7 @@ describe("scene-owned cockpit async state", () => {
 
 describe("ProjectSite", () => {
   it("uses the five section themes in the glass navigation", () => {
-    render(createElement(ProjectSite, { onOpenDemo: vi.fn(), onTerrainPresetChange: vi.fn(), playOpening: false, onOpeningComplete: vi.fn() }));
+    render(createElement(ProjectSite, { active: true, onOpenDemo: vi.fn(), onTerrainPresetChange: vi.fn(), playOpening: false, onOpeningComplete: vi.fn() }));
 
     const nav = document.querySelector(".showcase-nav") as HTMLElement;
     expect(within(nav).getByRole("link", { name: "项目定位" })).toHaveAttribute("href", "#origin");
@@ -740,7 +788,7 @@ describe("ProjectSite", () => {
   });
 
   it("uses the approved evidence-card layout on the formal safety section", () => {
-    render(createElement(ProjectSite, { onOpenDemo: vi.fn(), onTerrainPresetChange: vi.fn(), playOpening: false, onOpeningComplete: vi.fn() }));
+    render(createElement(ProjectSite, { active: true, onOpenDemo: vi.fn(), onTerrainPresetChange: vi.fn(), playOpening: false, onOpeningComplete: vi.fn() }));
 
     const context = document.querySelector("#context") as HTMLElement;
     expect(context).toHaveClass("context-cards-demo-section", "context-cards-demo-embedded");
@@ -751,14 +799,14 @@ describe("ProjectSite", () => {
   });
 
   it("maps hero through closing sections to the approved presets", () => {
-    render(createElement(ProjectSite, { onOpenDemo: vi.fn(), onTerrainPresetChange: vi.fn(), playOpening: false, onOpeningComplete: vi.fn() }));
+    render(createElement(ProjectSite, { active: true, onOpenDemo: vi.fn(), onTerrainPresetChange: vi.fn(), playOpening: false, onOpeningComplete: vi.fn() }));
     expect([...document.querySelectorAll("[data-terrain-preset]")].map((node) => node.getAttribute("data-terrain-preset"))).toEqual([
       "hidden", "positioning", "pain", "route", "demo", "product", "closing",
     ]);
   });
 
   it("renders the positioning orbit independently from the route archive", () => {
-    render(createElement(ProjectSite, { onOpenDemo: vi.fn(), onTerrainPresetChange: vi.fn(), playOpening: false, onOpeningComplete: vi.fn() }));
+    render(createElement(ProjectSite, { active: true, onOpenDemo: vi.fn(), onTerrainPresetChange: vi.fn(), playOpening: false, onOpeningComplete: vi.fn() }));
     const positioning = within(document.querySelector("#origin") as HTMLElement);
     const orbit = positioning.getByRole("region", { name: "一套面向研发测试的可解释性诊断与优化系统" });
     const route = screen.getByRole("group", { name: "技术路线四个环节" });
@@ -772,7 +820,7 @@ describe("ProjectSite", () => {
   });
 
   it("uses expanded explanatory copy for the four positioning cards", () => {
-    render(createElement(ProjectSite, { onOpenDemo: vi.fn(), onTerrainPresetChange: vi.fn(), playOpening: false, onOpeningComplete: vi.fn() }));
+    render(createElement(ProjectSite, { active: true, onOpenDemo: vi.fn(), onTerrainPresetChange: vi.fn(), playOpening: false, onOpeningComplete: vi.fn() }));
 
     const positioning = document.querySelector("#origin");
     expect(positioning).toBeInTheDocument();
@@ -793,7 +841,7 @@ describe("ProjectSite", () => {
   });
 
   it("centers the footer statement and adds a concise value sentence", () => {
-    render(createElement(ProjectSite, { onOpenDemo: vi.fn(), onTerrainPresetChange: vi.fn(), playOpening: false, onOpeningComplete: vi.fn() }));
+    render(createElement(ProjectSite, { active: true, onOpenDemo: vi.fn(), onTerrainPresetChange: vi.fn(), playOpening: false, onOpeningComplete: vi.fn() }));
 
     const footer = screen.getByRole("contentinfo");
     expect(footer).toHaveClass("showcase-footer-centered");

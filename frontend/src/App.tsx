@@ -19,6 +19,7 @@ import type { CockpitScreen, DiagnosisReport, DiagnosisStage } from "./cockpit/t
 import type { ShowcaseTerrainPreset } from "./terrain-presets";
 import { useShowcaseMotion } from "./useShowcaseMotion";
 import { useTerrainSectionPalette } from "./useTerrainSectionPalette";
+import { ViewTransitionStage, type ViewTransitionPhase } from "./ViewTransitionStage";
 import {
   findNearestLidarFrame,
   LidarFrameCache,
@@ -913,12 +914,13 @@ type ProjectSiteProps = {
   onTerrainPresetChange: (preset: ShowcaseTerrainPreset) => void;
   playOpening: boolean;
   onOpeningComplete: () => void;
+  active: boolean;
 };
 
-export function ProjectSite({ onOpenDemo, onTerrainPresetChange, playOpening, onOpeningComplete }: ProjectSiteProps) {
+export function ProjectSite({ onOpenDemo, onTerrainPresetChange, playOpening, onOpeningComplete, active }: ProjectSiteProps) {
   const showcaseRef = useRef<HTMLElement | null>(null);
   useTerrainSectionPalette(showcaseRef, onTerrainPresetChange);
-  useShowcaseMotion({ rootRef: showcaseRef, playOpening, onOpeningComplete });
+  useShowcaseMotion({ rootRef: showcaseRef, playOpening, onOpeningComplete, enabled: active });
   return <main className="showcase" ref={showcaseRef}>
     <ShowcaseOpening />
     <ShowcaseNav />
@@ -1003,12 +1005,36 @@ function App() {
   const [backendModel, setBackendModel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mapViewport, setMapViewport] = useState<MapViewport>(DEFAULT_MAP_VIEWPORT);
-  const [showDashboard, setShowDashboard] = useState(false);
+  const [viewPhase, setViewPhase] = useState<ViewTransitionPhase>("site");
+  const returnTargetRef = useRef<"showcase" | "contact">("showcase");
+  const showDashboard = viewPhase !== "site";
   const [cockpitScreen, setCockpitScreen] = useState<CockpitScreen>("entry");
   const handleOpenDemo = useCallback(() => {
+    if (viewPhase !== "site") return;
     showcaseOpeningPlayedRef.current = true;
     setCockpitScreen("entry");
-    setShowDashboard(true);
+    setTerrainPreset("hidden");
+    returnTargetRef.current = "showcase";
+    setViewPhase("entering");
+  }, [viewPhase]);
+  const handleReturnSite = useCallback((target: "showcase" | "contact" = "showcase") => {
+    if (viewPhase !== "cockpit") return;
+    returnTargetRef.current = target;
+    setViewPhase("exiting");
+  }, [viewPhase]);
+  const handleTransitionComplete = useCallback((phase: ViewTransitionPhase) => {
+    if (phase === "entering") {
+      setViewPhase("cockpit");
+      return;
+    }
+    if (phase === "exiting") {
+      setCockpitScreen("entry");
+      setTerrainPreset("hidden");
+      setViewPhase("site");
+      if (returnTargetRef.current === "contact") {
+        window.setTimeout(() => document.getElementById("contact")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+      }
+    }
   }, []);
   const [terrainPreset, setTerrainPreset] = useState<ShowcaseTerrainPreset>("hidden");
   const [ownedLidarIndex, setOwnedLidarIndex] = useState<OwnedLidarIndex | null>(null);
@@ -1059,6 +1085,15 @@ function App() {
     renderedLidarKey,
     currentPointCloud !== null,
   );
+
+  useEffect(() => {
+    if (viewPhase !== "cockpit") return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") handleReturnSite();
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [handleReturnSite, viewPhase]);
 
   useMapCanvas(
     perception,
@@ -1693,14 +1728,14 @@ function App() {
       </div>
     </aside>
   );
-  const currentView = !showDashboard ? (
-    positioningOrbitDemo ? <PositioningOrbitDemo /> : contextCardsDemo ? <ContextCardsDemo /> : <ProjectSite
+  const siteView = positioningOrbitDemo ? <PositioningOrbitDemo /> : contextCardsDemo ? <ContextCardsDemo /> : <ProjectSite
       onOpenDemo={handleOpenDemo}
       onTerrainPresetChange={setTerrainPreset}
       playOpening={!showcaseOpeningPlayedRef.current}
       onOpeningComplete={handleShowcaseOpeningComplete}
-    />
-  ) : (
+      active={viewPhase === "site" || viewPhase === "exiting"}
+    />;
+  const cockpitView = (
     <CockpitExperience
       scenes={scenes}
       selectedSceneKey={selectedScene.id}
@@ -1733,16 +1768,9 @@ function App() {
       onSceneSelect={handleSceneSelection}
       onSeekReportEvidence={handleSeekRiskEvent}
       onScreenChange={setCockpitScreen}
-      onReturnSite={() => {
-        setTerrainPreset("hidden");
-        setCockpitScreen("entry");
-        setShowDashboard(false);
-      }}
+      onReturnSite={handleReturnSite}
       onContact={() => {
-        setTerrainPreset("hidden");
-        setCockpitScreen("entry");
-        setShowDashboard(false);
-        window.setTimeout(() => document.getElementById("contact")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+        handleReturnSite("contact");
       }}
     />
   );
@@ -1754,7 +1782,12 @@ function App() {
         preset={terrainPreset}
         risk={panelRisk}
       />
-      {currentView}
+      <ViewTransitionStage
+        phase={viewPhase}
+        site={siteView}
+        cockpit={cockpitView}
+        onTransitionComplete={handleTransitionComplete}
+      />
     </>
   );
 }

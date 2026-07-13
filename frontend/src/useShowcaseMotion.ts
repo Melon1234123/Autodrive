@@ -54,6 +54,7 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete, ena
   const playOnMountRef = useRef(playOpening);
   const completeRef = useRef(onOpeningComplete);
   const openingResolvedRef = useRef(false);
+  if (!playOpening) playOnMountRef.current = false;
   completeRef.current = onOpeningComplete;
 
   useLayoutEffect(() => {

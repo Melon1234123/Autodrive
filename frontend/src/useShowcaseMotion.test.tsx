@@ -214,9 +214,10 @@ function Harness({
   onOpeningComplete = vi.fn(),
   seedHiddenStyles = false,
   includeHeroMedia = true,
+  enabled = true,
 }) {
   const rootRef = useRef<HTMLElement | null>(null);
-  useShowcaseMotion({ rootRef, playOpening, onOpeningComplete });
+  useShowcaseMotion({ rootRef, playOpening, onOpeningComplete, enabled });
 
   return (
     <main ref={rootRef}>
@@ -435,6 +436,63 @@ it.each([
   expect(root).toHaveClass("showcase-motion-active");
   expect(root).not.toHaveClass("showcase-opening-active");
   expect(complete).toHaveBeenCalledTimes(1);
+});
+
+it("retains the showcase scroll root position while motion is disabled and re-enabled", () => {
+  installMatchMedia({ reduced: false, desktop: true });
+  const view = render(<Harness playOpening={false} />);
+  const root = view.container.querySelector("main") as HTMLElement;
+  const content = root.querySelector("[data-lenis-content]") as HTMLElement;
+  const pages = Array.from(content.querySelectorAll<HTMLElement>(
+    ":scope > .showcase-hero, :scope > [data-motion-section]",
+  ));
+  pages.forEach((page, index) => {
+    Object.defineProperty(page, "offsetTop", { configurable: true, value: index * 900 });
+  });
+  root.scrollTop = 1800;
+
+  view.rerender(<Harness playOpening={false} enabled={false} />);
+
+  expect(view.container.querySelector("main")).toBe(root);
+  expect(root.scrollTop).toBe(1800);
+  expect(root).not.toHaveClass("showcase-motion-active");
+  expect(fireEvent.keyDown(window, { key: "PageDown" })).toBe(true);
+
+  view.rerender(<Harness playOpening={false} enabled />);
+
+  expect(view.container.querySelector("main")).toBe(root);
+  expect(root.scrollTop).toBe(1800);
+  expect(root).toHaveClass("showcase-motion-active");
+  expect(fireEvent.keyDown(window, { key: "PageDown" })).toBe(false);
+  expect(motionMocks.snapGoTo).toHaveBeenLastCalledWith(3);
+});
+
+it("recreates enabled motion without replaying an interrupted opening", () => {
+  installMatchMedia({ reduced: false, desktop: true });
+  const complete = vi.fn();
+  const view = render(<Harness onOpeningComplete={complete} />);
+  const root = view.container.querySelector("main") as HTMLElement;
+
+  expect(openingCompletions()).toHaveLength(1);
+  expect(root).toHaveClass("showcase-motion-active", "showcase-opening-active");
+
+  view.rerender(<Harness playOpening={false} onOpeningComplete={complete} enabled={false} />);
+
+  expect(motionMocks.snapDestroy).toHaveBeenCalledTimes(1);
+  expect(motionMocks.lenisDestroy).toHaveBeenCalledTimes(1);
+  expect(root).not.toHaveClass("showcase-motion-active", "showcase-opening-active");
+  expect(root.querySelector("[data-motion-opening]")).toHaveAttribute("hidden");
+
+  view.rerender(<Harness playOpening={false} onOpeningComplete={complete} enabled />);
+
+  expect(view.container.querySelector("main")).toBe(root);
+  expect(motionMocks.lenisConstruct).toHaveBeenCalledTimes(2);
+  expect(motionMocks.snapConstruct).toHaveBeenCalledTimes(2);
+  expect(root).toHaveClass("showcase-motion-active");
+  expect(root).not.toHaveClass("showcase-opening-active");
+  expect(openingCompletions()).toHaveLength(1);
+  expect(root.querySelector("[data-motion-opening]")).toHaveAttribute("hidden");
+  expect(complete).not.toHaveBeenCalled();
 });
 
 it.each([

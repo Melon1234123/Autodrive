@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent, WheelEvent } from "react";
 import { RiskEventsList } from "./RiskEventsPanel";
 import { deriveRiskEvents } from "./risk-events";
@@ -915,13 +915,34 @@ type ProjectSiteProps = {
   playOpening: boolean;
   onOpeningComplete: () => void;
   active: boolean;
+  onShowcaseRootChange?: (root: HTMLElement | null) => void;
+  restoreScrollTop?: number | null;
 };
 
-export function ProjectSite({ onOpenDemo, onTerrainPresetChange, playOpening, onOpeningComplete, active }: ProjectSiteProps) {
+export function ProjectSite({
+  onOpenDemo,
+  onTerrainPresetChange,
+  playOpening,
+  onOpeningComplete,
+  active,
+  onShowcaseRootChange,
+  restoreScrollTop = null,
+}: ProjectSiteProps) {
   const showcaseRef = useRef<HTMLElement | null>(null);
+  const setShowcaseRoot = useCallback((root: HTMLElement | null) => {
+    showcaseRef.current = root;
+    onShowcaseRootChange?.(root);
+  }, [onShowcaseRootChange]);
+
+  useLayoutEffect(() => {
+    if (restoreScrollTop !== null && showcaseRef.current) {
+      showcaseRef.current.scrollTop = restoreScrollTop;
+    }
+  }, [restoreScrollTop]);
+
   useTerrainSectionPalette(showcaseRef, onTerrainPresetChange);
   useShowcaseMotion({ rootRef: showcaseRef, playOpening, onOpeningComplete, enabled: active });
-  return <main className="showcase" ref={showcaseRef}>
+  return <main className="showcase" ref={setShowcaseRoot}>
     <ShowcaseOpening />
     <ShowcaseNav />
 
@@ -1007,10 +1028,13 @@ function App() {
   const [mapViewport, setMapViewport] = useState<MapViewport>(DEFAULT_MAP_VIEWPORT);
   const [viewPhase, setViewPhase] = useState<ViewTransitionPhase>("site");
   const returnTargetRef = useRef<"showcase" | "contact">("showcase");
+  const showcaseRootRef = useRef<HTMLElement | null>(null);
+  const showcaseScrollTopRef = useRef(0);
   const showDashboard = viewPhase !== "site";
   const [cockpitScreen, setCockpitScreen] = useState<CockpitScreen>("entry");
   const handleOpenDemo = useCallback(() => {
     if (viewPhase !== "site") return;
+    showcaseScrollTopRef.current = showcaseRootRef.current?.scrollTop ?? 0;
     showcaseOpeningPlayedRef.current = true;
     setCockpitScreen("entry");
     setTerrainPreset("hidden");
@@ -1728,14 +1752,18 @@ function App() {
       </div>
     </aside>
   );
-  const siteView = positioningOrbitDemo ? <PositioningOrbitDemo /> : contextCardsDemo ? <ContextCardsDemo /> : <ProjectSite
+  const siteView = viewPhase === "cockpit" ? null : positioningOrbitDemo ? <PositioningOrbitDemo /> : contextCardsDemo ? <ContextCardsDemo /> : <ProjectSite
       onOpenDemo={handleOpenDemo}
       onTerrainPresetChange={setTerrainPreset}
       playOpening={!showcaseOpeningPlayedRef.current}
       onOpeningComplete={handleShowcaseOpeningComplete}
       active={viewPhase === "site" || viewPhase === "exiting"}
+      onShowcaseRootChange={(root) => {
+        showcaseRootRef.current = root;
+      }}
+      restoreScrollTop={viewPhase === "exiting" ? showcaseScrollTopRef.current : null}
     />;
-  const cockpitView = (
+  const cockpitView = viewPhase === "site" ? null : (
     <CockpitExperience
       scenes={scenes}
       selectedSceneKey={selectedScene.id}

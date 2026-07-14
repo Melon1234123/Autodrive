@@ -166,6 +166,33 @@ it("does not mount a global aurora background", () => {
   expect(document.querySelector(".app-aurora")).not.toBeInTheDocument();
 });
 
+it("lazy-mounts the cockpit and showcase layers across transition phases", () => {
+  render(createElement(App));
+  expect(document.querySelector(".showcase")).toBeInTheDocument();
+  expect(document.querySelector(".cockpit-experience")).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
+  expect(document.querySelector(".showcase")).toBeInTheDocument();
+  expect(document.querySelector(".cockpit-experience")).toBeInTheDocument();
+
+  fireEvent.transitionEnd(screen.getByTestId("view-layer-cockpit"), { propertyName: "transform" });
+  expect(document.querySelector(".showcase")).not.toBeInTheDocument();
+  expect(document.querySelector(".cockpit-experience")).toBeInTheDocument();
+});
+
+it("restores the saved showcase scroll position while exiting the cockpit", () => {
+  render(createElement(App));
+  const showcase = document.querySelector<HTMLElement>(".showcase")!;
+  Object.defineProperty(showcase, "scrollTop", { configurable: true, value: 640, writable: true });
+
+  enterCockpit();
+  fireEvent.click(screen.getByRole("button", { name: "返回官网" }));
+
+  const restoredShowcase = document.querySelector<HTMLElement>(".showcase")!;
+  expect(restoredShowcase).not.toBe(showcase);
+  expect(restoredShowcase.scrollTop).toBe(640);
+});
+
 it("keeps one terrain backdrop mounted while switching views", () => {
   render(createElement(App));
   const terrain = screen.getByTestId("terrain-backdrop-mock");

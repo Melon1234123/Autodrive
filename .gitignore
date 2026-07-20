@@ -38,3 +38,13 @@ frontend/public/*.mov
 frontend/public/*.mkv
 frontend/public/*.avi
 frontend/public/*.mp4
+frontend/public/sample.mp4
+frontend/public/telemetry.json
+frontend/public/perception.json
+frontend/public/dataset-meta.json
+frontend/public/scenes/**/sample.mp4
+frontend/public/scenes/**/telemetry.json
+frontend/public/scenes/**/perception.json
+frontend/public/scenes/**/dataset-meta.json
+frontend/public/scenes/**/lidar/
+foxglove/

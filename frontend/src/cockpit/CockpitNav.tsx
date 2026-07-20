@@ -33,8 +33,8 @@ export function CockpitNav({ onReturnSite, onContact }: CockpitNavProps) {
           <small>诊断驾驶舱</small>
         </div>
         <div className="cockpit-nav__actions">
-          <button type="button" onClick={onReturnSite}><ArrowLeft size={15} aria-hidden="true" />返回官网</button>
-          <button type="button" onClick={onContact}>联系我们<ArrowUpRight size={15} aria-hidden="true" /></button>
+          <button className="cockpit-nav__return" type="button" onClick={onReturnSite}><ArrowLeft size={15} aria-hidden="true" />返回官网</button>
+          <button className="cockpit-nav__contact" type="button" onClick={onContact}>联系我们<ArrowUpRight size={15} aria-hidden="true" /></button>
         </div>
       </GlassSurface>
     </nav>

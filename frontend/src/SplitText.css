@@ -1,0 +1,8 @@
+.split-parent {
+  overflow: clip;
+}
+
+.split-char {
+  display: inline-block;
+  will-change: transform, opacity;
+}

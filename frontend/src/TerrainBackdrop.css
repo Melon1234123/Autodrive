@@ -25,7 +25,6 @@
 .terrain-backdrop--fallback[data-preset="closing"] { background-color: #102e27; background-blend-mode: multiply; }
 .terrain-backdrop--fallback[data-preset="route"] { background-color: #e6efe6; background-blend-mode: soft-light; }
 .terrain-backdrop--fallback[data-preset="demo"] { background-color: #d8e6de; background-blend-mode: soft-light; }
-.terrain-backdrop--fallback[data-preset="product"] { background-color: #bfd4c3; background-blend-mode: soft-light; }
 .terrain-backdrop--fallback[data-view="dashboard"] { background-color: #dce8df; background-blend-mode: soft-light; }
 
 @media (prefers-reduced-motion: reduce) {

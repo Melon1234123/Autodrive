@@ -4,14 +4,16 @@ import type { CockpitScreen } from "./types";
 
 type CockpitScrollOptions = {
   rootRef: RefObject<HTMLElement | null>;
-  reportRef: RefObject<HTMLElement | null>;
-  reportExpanded: boolean;
   onScreenChange: (screen: CockpitScreen) => void;
+  screenOrder: readonly CockpitScreen[];
+  activeScreen: CockpitScreen;
+  pendingScreen: CockpitScreen | null;
+  onScreenIntent?: (screen: CockpitScreen) => void;
+  onScreenSettled?: (screen: CockpitScreen) => void;
 };
 
 type CockpitKeyboardCommand = CockpitScrollCommand | "first" | "last";
 
-const SCREEN_ORDER: readonly CockpitScreen[] = ["entry", "live", "diagnosis"];
 const WHEEL_GESTURE_SETTLE_MS = 120;
 const WHEEL_GESTURE_EXCLUSION = [
   "input", "textarea", "select", "[contenteditable]:not([contenteditable='false'])",
@@ -19,11 +21,25 @@ const WHEEL_GESTURE_EXCLUSION = [
 ].join(",");
 const KEYBOARD_CONTROL_EXCLUSION = [
   "input", "textarea", "select", "button", "a[href]", "[role='button']",
-  "[contenteditable]:not([contenteditable='false'])",
+  "[contenteditable]:not([contenteditable='false'])", "[data-lenis-prevent-vertical]",
 ].join(",");
 
+export function cockpitScrollBehavior(): ScrollBehavior {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return "smooth";
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+}
+
 function isCockpitScreen(value: string | undefined): value is CockpitScreen {
-  return value === "entry" || value === "live" || value === "diagnosis";
+  return value === "entry" || value === "live" || value === "diagnosis" || value === "report";
+}
+
+function ownsWheelGesture(event: WheelEvent, root: HTMLElement) {
+  const target = event.target instanceof Element ? event.target : null;
+  const surface = target?.closest<HTMLElement>("[data-cockpit-scroll-surface]");
+  if (!surface || !root.contains(surface)) return false;
+  const maximumScrollTop = Math.max(0, surface.scrollHeight - surface.clientHeight);
+  if (maximumScrollTop <= 0) return false;
+  return event.deltaY > 0 ? surface.scrollTop < maximumScrollTop : surface.scrollTop > 0;
 }
 
 function relativeOffsetTop(element: HTMLElement, root: HTMLElement) {
@@ -74,27 +90,34 @@ function keyboardCommand(event: KeyboardEvent): CockpitKeyboardCommand | null {
 
 export function useCockpitScroll({
   rootRef,
-  reportRef,
-  reportExpanded,
   onScreenChange,
+  screenOrder,
+  activeScreen,
+  pendingScreen,
+  onScreenIntent,
+  onScreenSettled,
 }: CockpitScrollOptions) {
-  const reportExpandedRef = useRef(reportExpanded);
   const onScreenChangeRef = useRef(onScreenChange);
-  reportExpandedRef.current = reportExpanded;
+  const activeScreenRef = useRef(activeScreen);
+  const pendingScreenRef = useRef(pendingScreen);
+  const onScreenIntentRef = useRef(onScreenIntent);
+  const onScreenSettledRef = useRef(onScreenSettled);
   onScreenChangeRef.current = onScreenChange;
+  activeScreenRef.current = activeScreen;
+  pendingScreenRef.current = pendingScreen;
+  onScreenIntentRef.current = onScreenIntent;
+  onScreenSettledRef.current = onScreenSettled;
 
   useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
 
     const screenElements = Array.from(root.querySelectorAll<HTMLElement>(".cockpit-screen"));
-    const screens = screenElements.map((element, index) => {
+    const screens = screenElements.flatMap((element) => {
       const declared = element.dataset.cockpitScreen;
-      return {
-        element,
-        screen: isCockpitScreen(declared) ? declared : SCREEN_ORDER[index],
-      };
-    }).filter((entry): entry is { element: HTMLElement; screen: CockpitScreen } => Boolean(entry.screen));
+      if (!isCockpitScreen(declared) || !screenOrder.includes(declared)) return [];
+      return [{ element, screen: declared }];
+    });
     let wheelGestureTimer = 0;
     let wheelGestureActive = false;
 
@@ -107,21 +130,6 @@ export function useCockpitScroll({
     };
     let lastScreen = currentScreen();
 
-    const reportAtTop = () => {
-      const anchor = reportRef.current;
-      if (!anchor) {
-        const diagnosis = screens.find(({ screen }) => screen === "diagnosis");
-        return !diagnosis || root.scrollTop <= relativeOffsetTop(diagnosis.element, root) + 1;
-      }
-      return root.scrollTop <= relativeOffsetTop(anchor, root) + 1;
-    };
-
-    const syncReportReadingState = () => {
-      const reading = reportExpandedRef.current && !reportAtTop();
-      if (reading) root.setAttribute("data-report-reading", "true");
-      else root.removeAttribute("data-report-reading");
-    };
-
     const announceScreen = (screen: CockpitScreen) => {
       if (screen === lastScreen) return;
       lastScreen = screen;
@@ -129,24 +137,17 @@ export function useCockpitScroll({
     };
 
     const navigate = (command: CockpitKeyboardCommand) => {
-      const current = currentScreen();
+      const pending = pendingScreenRef.current;
+      const current = pending && screenOrder.includes(pending) ? pending : currentScreen();
       if (!current) return false;
-      const atTop = reportAtTop();
-      if (current === "diagnosis" && reportExpandedRef.current && !atTop) return false;
-      if (
-        (command === "previous" || command === "next") &&
-        current === "diagnosis" && reportExpandedRef.current &&
-        command === "next"
-      ) {
-        return false;
-      }
-      const destination = command === "first" ? "entry"
-        : command === "last" ? "diagnosis"
-          : resolveCockpitDestination(command, current, reportExpandedRef.current, atTop);
+      const destination = command === "first" ? screenOrder[0]
+        : command === "last" ? screenOrder[screenOrder.length - 1]
+          : resolveCockpitDestination(screenOrder, command, current);
       if (!destination) return true;
       const target = screens.find(({ screen }) => screen === destination)?.element;
       if (!target) return false;
-      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      onScreenIntentRef.current?.(destination);
+      target.scrollIntoView({ behavior: cockpitScrollBehavior(), block: "start" });
       return true;
     };
 
@@ -164,7 +165,7 @@ export function useCockpitScroll({
       const modified = event.altKey || event.ctrlKey || event.metaKey || event.shiftKey;
       if (
         event.defaultPrevented || !event.cancelable || !vertical || modified ||
-        excludedWheelTarget(event, root)
+        excludedWheelTarget(event, root) || ownsWheelGesture(event, root)
       ) return;
 
       const current = currentScreen();
@@ -174,11 +175,6 @@ export function useCockpitScroll({
         holdWheelGesture();
         return;
       }
-      if (
-        current === "diagnosis" && reportExpandedRef.current &&
-        (command === "next" || !reportAtTop())
-      ) return;
-
       event.preventDefault();
       holdWheelGesture();
       navigate(command);
@@ -192,31 +188,27 @@ export function useCockpitScroll({
 
     const handleScroll = () => {
       const screen = currentScreen();
-      if (screen) announceScreen(screen);
-      syncReportReadingState();
+      if (!screen) return;
+      const pending = pendingScreenRef.current;
+      if (pending) {
+        if (screen !== pending) return;
+        pendingScreenRef.current = null;
+        lastScreen = screen;
+        onScreenSettledRef.current?.(screen);
+        if (activeScreenRef.current !== screen) onScreenChangeRef.current(screen);
+        return;
+      }
+      announceScreen(screen);
     };
 
     root.addEventListener("wheel", handleWheel, { passive: false });
     root.addEventListener("scroll", handleScroll, { passive: true });
     window.addEventListener("keydown", handleKeyDown);
-    syncReportReadingState();
-
     return () => {
       window.clearTimeout(wheelGestureTimer);
       root.removeEventListener("wheel", handleWheel);
       root.removeEventListener("scroll", handleScroll);
       window.removeEventListener("keydown", handleKeyDown);
-      root.removeAttribute("data-report-reading");
     };
-  }, [reportRef, rootRef]);
-
-  useLayoutEffect(() => {
-    const root = rootRef.current;
-    const anchor = reportRef.current;
-    if (!root) return;
-    const anchorTop = anchor ? relativeOffsetTop(anchor, root) : Number.POSITIVE_INFINITY;
-    const reading = reportExpanded && root.scrollTop > anchorTop + 1;
-    if (reading) root.setAttribute("data-report-reading", "true");
-    else root.removeAttribute("data-report-reading");
-  }, [reportExpanded, reportRef, rootRef]);
+  }, [rootRef, screenOrder]);
 }

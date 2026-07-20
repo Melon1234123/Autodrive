@@ -130,35 +130,75 @@ function makePointCloud(points: Float32Array, opacity: number, pose?: Omit<Lidar
   return new THREE.Points(geometry, material);
 }
 
-function addObjects(scene: THREE.Group, objects: LidarPerceptionObject[]) {
-  objects.forEach((object) => {
-    const color = objectColors[object.risk] ?? objectColors.unknown;
-    const group = new THREE.Group();
-    const height = Math.max(object.height, 0.2);
-    const width = Math.max(object.width, 0.2);
-    const length = Math.max(object.length, 0.2);
-    const geometry = new THREE.BoxGeometry(width, height, length);
-    const fill = new THREE.Mesh(
-      geometry,
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.15, depthWrite: false }),
-    );
-    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.94 }));
-    const objectCenterHeight = Math.max(0, object.z) + height / 2;
-    fill.position.y = objectCenterHeight;
-    edges.position.y = objectCenterHeight;
+type LidarObjectVisual = {
+  group: THREE.Group;
+  fill: THREE.Mesh<THREE.BoxGeometry, THREE.MeshBasicMaterial>;
+  edges: THREE.LineSegments<THREE.EdgesGeometry, THREE.LineBasicMaterial>;
+  footprint: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+};
 
-    const footprint = new THREE.Mesh(
-      new THREE.PlaneGeometry(width, length),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.09, depthWrite: false, side: THREE.DoubleSide }),
-    );
-    footprint.position.y = 0.015;
-    footprint.rotation.x = -Math.PI / 2;
-    group.add(footprint, fill, edges);
-    const ground = lidarToWorldGround(object.x, object.y);
-    group.position.set(ground.x, 0, ground.z);
-    group.rotation.y = lidarYawToWorldRotation(object.yaw);
-    scene.add(group);
+function createObjectVisual(object: LidarPerceptionObject): LidarObjectVisual {
+  const group = new THREE.Group();
+  const geometry = new THREE.BoxGeometry(1, 1, 1);
+  const color = objectColors[object.risk] ?? objectColors.unknown;
+  const fill = new THREE.Mesh(
+    geometry,
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.15, depthWrite: false }),
+  );
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geometry),
+    new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.94 }),
+  );
+  const footprint = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.09, depthWrite: false, side: THREE.DoubleSide }),
+  );
+  footprint.position.y = 0.015;
+  footprint.rotation.x = -Math.PI / 2;
+  group.add(footprint, fill, edges);
+  group.userData.lidarObjectId = object.id;
+  return { group, fill, edges, footprint };
+}
+
+function updateObjectVisual(visual: LidarObjectVisual, object: LidarPerceptionObject) {
+  const color = objectColors[object.risk] ?? objectColors.unknown;
+  const height = Math.max(object.height, 0.2);
+  const width = Math.max(object.width, 0.2);
+  const length = Math.max(object.length, 0.2);
+  const objectCenterHeight = Math.max(0, object.z) + height / 2;
+  visual.fill.material.color.setHex(color);
+  visual.edges.material.color.setHex(color);
+  visual.footprint.material.color.setHex(color);
+  visual.fill.scale.set(width, height, length);
+  visual.edges.scale.set(width, height, length);
+  visual.fill.position.y = objectCenterHeight;
+  visual.edges.position.y = objectCenterHeight;
+  visual.footprint.scale.set(width, length, 1);
+  const ground = lidarToWorldGround(object.x, object.y);
+  visual.group.position.set(ground.x, 0, ground.z);
+  visual.group.rotation.y = lidarYawToWorldRotation(object.yaw);
+}
+
+function syncObjectLayer(group: THREE.Group, objects: LidarPerceptionObject[]) {
+  const existing = new Map<string, LidarObjectVisual>();
+  group.children.forEach((child) => {
+    const visual = child.userData.lidarObjectVisual as LidarObjectVisual | undefined;
+    if (visual) existing.set(child.userData.lidarObjectId as string, visual);
   });
+  const activeIds = new Set<string>();
+  objects.forEach((object) => {
+    activeIds.add(object.id);
+    const visual = existing.get(object.id) ?? createObjectVisual(object);
+    updateObjectVisual(visual, object);
+    if (!visual.group.parent) group.add(visual.group);
+    visual.group.userData.lidarObjectVisual = visual;
+  });
+  [...existing.entries()]
+    .filter(([id]) => !activeIds.has(id))
+    .forEach(([, visual]) => {
+      group.remove(visual.group);
+      disposeObjectResources(visual.group);
+    });
 }
 
 function addWorkbench(scene: THREE.Scene, group: THREE.Group) {
@@ -261,6 +301,7 @@ type LidarBevRuntime = {
   camera: THREE.OrthographicCamera;
   staticGroup: THREE.Group;
   dynamicGroup: THREE.Group;
+  objectGroup: THREE.Group;
   resizeObserver: ResizeObserver;
 };
 
@@ -269,6 +310,13 @@ export function LidarBev({ sceneId, pointCloud, frame, history, status, errorMes
   const runtimeRef = useRef<LidarBevRuntime | null>(null);
   const failedSceneIdRef = useRef<string | null>(null);
   const sceneIdRef = useRef(sceneId);
+  const previousDataRef = useRef<{
+    sceneId: string;
+    pointCloud: Float32Array | null;
+    history: LidarHistoryCloud[];
+    frame: LidarPerceptionFrame | null;
+    webglUnavailable: boolean;
+  } | null>(null);
   const [webglUnavailable, setWebglUnavailable] = useState(false);
   sceneIdRef.current = sceneId;
 
@@ -285,11 +333,13 @@ export function LidarBev({ sceneId, pointCloud, frame, history, status, errorMes
       const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, .1, 180);
       const staticGroup = new THREE.Group();
       const dynamicGroup = new THREE.Group();
+      const objectGroup = new THREE.Group();
       camera.up.set(0, 0, 1);
       camera.position.set(0, 105, LIDAR_VIEW_CENTER_FORWARD);
       camera.lookAt(0, 0, LIDAR_VIEW_CENTER_FORWARD);
-      scene.add(staticGroup, dynamicGroup);
+      scene.add(staticGroup, dynamicGroup, objectGroup);
       addWorkbench(scene, staticGroup);
+      addEgo(staticGroup);
 
       const resize = (renderAfterResize: boolean) => {
         const parent = canvas.parentElement;
@@ -307,7 +357,7 @@ export function LidarBev({ sceneId, pointCloud, frame, history, status, errorMes
         if (renderAfterResize) renderer?.render(scene as THREE.Scene, camera);
       };
       resizeObserver = new ResizeObserver(() => resize(true));
-      runtimeRef.current = { renderer, scene, camera, staticGroup, dynamicGroup, resizeObserver };
+      runtimeRef.current = { renderer, scene, camera, staticGroup, dynamicGroup, objectGroup, resizeObserver };
       resizeObserver.observe(canvas.parentElement ?? canvas);
       resize(false);
       failedSceneIdRef.current = null;
@@ -340,17 +390,32 @@ export function LidarBev({ sceneId, pointCloud, frame, history, status, errorMes
     const runtime = runtimeRef.current;
     if (!runtime) return;
     clearDynamicGroup(runtime.dynamicGroup);
+    clearDynamicGroup(runtime.objectGroup);
     runtime.renderer.render(runtime.scene, runtime.camera);
   }, [sceneId]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
-    clearDynamicGroup(runtime.dynamicGroup);
-    history.slice(-2).forEach((cloud, index) => runtime.dynamicGroup.add(makePointCloud(cloud.points, .12 + index * .1, cloud)));
-    if (pointCloud) runtime.dynamicGroup.add(makePointCloud(pointCloud, .9));
-    if (frame) addObjects(runtime.dynamicGroup, frame.objects);
-    addEgo(runtime.dynamicGroup);
+    const previous = previousDataRef.current;
+    const cloudChanged = !previous
+      || previous.sceneId !== sceneId
+      || previous.pointCloud !== pointCloud
+      || previous.history !== history
+      || previous.webglUnavailable !== webglUnavailable;
+    const objectsChanged = !previous
+      || previous.sceneId !== sceneId
+      || previous.frame !== frame
+      || previous.webglUnavailable !== webglUnavailable;
+    if (cloudChanged) {
+      clearDynamicGroup(runtime.dynamicGroup);
+      history.slice(-2).forEach((cloud, index) => runtime.dynamicGroup.add(makePointCloud(cloud.points, .12 + index * .1, cloud)));
+      if (pointCloud) runtime.dynamicGroup.add(makePointCloud(pointCloud, .9));
+    }
+    if (objectsChanged) {
+      syncObjectLayer(runtime.objectGroup, frame?.objects ?? []);
+    }
+    previousDataRef.current = { sceneId, pointCloud, history, frame, webglUnavailable };
     runtime.renderer.render(runtime.scene, runtime.camera);
   }, [frame, history, pointCloud, sceneId, webglUnavailable]);
 
@@ -363,11 +428,10 @@ export function LidarBev({ sceneId, pointCloud, frame, history, status, errorMes
   const showBlockingState = !pointCloud;
 
   return (
-    <div className="lidar-bev-shell">
+    <div className="lidar-bev-shell" data-scene-id={sceneId}>
       <canvas ref={canvasRef} className="lidar-bev-canvas" data-testid="lidar-webgl-canvas" />
       {webglUnavailable && pointCloud && <BasicBevFallback frame={frame} />}
       {showBlockingState && <div className="lidar-bev-state lidar-bev-overlay">{message}</div>}
-      <span className="lidar-bev-source">LiDAR · 原始点云</span>
       {(webglUnavailable && pointCloud || showStaleWarning) && (
         <div className="lidar-bev-warnings">
           {webglUnavailable && pointCloud && <p className="lidar-bev-warning">WebGL 不可用，已切换到基础检测框视图</p>}

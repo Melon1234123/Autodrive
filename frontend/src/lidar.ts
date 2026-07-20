@@ -34,6 +34,60 @@ export function findNearestLidarFrame(index: LidarIndex, time: number): LidarFra
   );
 }
 
+/** Returns the latest recorded scan that the video timeline has reached. */
+export function findLidarFrameIndexAtOrBefore(index: LidarIndex, time: number): number {
+  if (index.frames.length === 0) return -1;
+  const firstAfterTime = index.frames.findIndex((frame) => frame.time > time);
+  return firstAfterTime === -1 ? index.frames.length - 1 : Math.max(0, firstAfterTime - 1);
+}
+
+export function findLidarFrameAtOrBefore(index: LidarIndex, time: number): LidarFrameIndex | null {
+  const frameIndex = findLidarFrameIndexAtOrBefore(index, time);
+  return frameIndex < 0 ? null : index.frames[frameIndex];
+}
+
+export function selectLidarFrameWindow(
+  index: LidarIndex,
+  targetIndex: number,
+  historyCount: number,
+  lookaheadCount: number,
+): LidarFrameIndex[] {
+  if (targetIndex < 0 || targetIndex >= index.frames.length) return [];
+  const start = Math.max(0, targetIndex - historyCount);
+  const end = Math.min(index.frames.length, targetIndex + lookaheadCount + 1);
+  return index.frames.slice(start, end);
+}
+
+/** Keeps decoded scans in their recorded order when the video time advances faster than loading. */
+export class LidarFrameSequencer {
+  #presentedIndex = -1;
+  #targetIndex: number | null = null;
+
+  reset(): void {
+    this.#presentedIndex = -1;
+    this.#targetIndex = null;
+  }
+
+  setTarget(index: number): void {
+    this.#targetIndex = index;
+  }
+
+  next(): number | null {
+    if (this.#targetIndex === null) return null;
+    if (this.#targetIndex < this.#presentedIndex) {
+      return this.#targetIndex;
+    }
+    return this.#presentedIndex < this.#targetIndex ? this.#presentedIndex + 1 : null;
+  }
+
+  markPresented(index: number): void {
+    if (this.next() !== index) {
+      throw new Error("LiDAR frame is not the next eligible frame");
+    }
+    this.#presentedIndex = index;
+  }
+}
+
 export type LidarRequestTicket = { generation: number; sequence: number };
 
 export class LidarRequestGate {

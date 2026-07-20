@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from autodrive_harness import DiagnosisProgress, SceneCatalog, run_scene_diagnosis
-from autodrive_harness.enhancement import EnhancementPlan
+from autodrive_harness.narrative import (
+    NarrativeFailure,
+    NarrativePayload,
+    NarrativePromptProjection,
+)
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,8 +25,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 if __package__:
     from .diagnosis_jobs import DiagnosisJobManager
+    from .model_narrative import create_model_narrative_composer
 else:
     from diagnosis_jobs import DiagnosisJobManager
+    from model_narrative import create_model_narrative_composer
 
 BACKEND_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BACKEND_DIR.parent
@@ -47,9 +53,13 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://localhost:5175",
+        "http://127.0.0.1:5175",
     ],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -78,22 +88,33 @@ def run_diagnosis_pipeline(
     scene_key: str,
     data_version: str,
     progress_callback: Callable[[DiagnosisProgress], None],
+    cancelled: Optional[Callable[[], bool]] = None,
 ):
-    enhancer = None
+    composer = None
+    model_name = None
     if has_model_credentials():
+        model_name = OPENAI_MODEL
         try:
-            enhancer = create_report_enhancer()
+            client = get_openai_client()
+            if client is None:
+                raise RuntimeError("configured model client is unavailable")
+            composer = create_model_narrative_composer(client, OPENAI_MODEL)
+            if composer is None:
+                raise RuntimeError("configured narrative composer is unavailable")
         except Exception as exc:
             logger.warning(
-                "report enhancer initialization failed: %s",
+                "model narrative initialization failed: %s",
                 type(exc).__name__,
             )
+            composer = _UnavailableModelNarrativeComposer()
     return run_scene_diagnosis(
         scene_catalog,
         scene_key,
         data_version,
         progress_callback,
-        enhancer=enhancer,
+        composer=composer,
+        model_name=model_name,
+        cancelled=cancelled,
     )
 
 
@@ -138,6 +159,7 @@ class CreateDiagnosisRequest(BaseModel):
         strict=True,
     )
     dataVersion: str = Field(min_length=1, max_length=128, strict=True)
+    force: bool = Field(default=False, strict=True)
 
     @field_validator("sceneKey")
     @classmethod
@@ -217,59 +239,18 @@ def fallback_diagnose(frame: TelemetryFrame) -> DiagnosisResult:
     )
 
 
-def get_openai_client() -> OpenAI | None:
+class _UnavailableModelNarrativeComposer:
+    """Marks a configured-but-unavailable model as an honest local fallback."""
+
+    def compose(self, _projection: NarrativePromptProjection) -> NarrativePayload:
+        raise NarrativeFailure("unavailable")
+
+
+def get_openai_client() -> Optional[OpenAI]:
     if not has_model_credentials():
         return None
 
     return OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL, timeout=4.0, max_retries=0)
-
-
-class OpenAIReportEnhancer:
-    """Requests only a validated ordering/style plan, never report narrative."""
-
-    def __init__(self, client: OpenAI):
-        self._client = client
-
-    def plan(self, local_report: dict[str, Any]) -> dict[str, Any]:
-        allowed = {
-            "finding_ids": [item["id"] for item in local_report["key_findings"]],
-            "recommendation_ids": [item["id"] for item in local_report["recommendations"]],
-        }
-        prompt = (
-            "你只能返回 JSON 排序计划，不得生成、改写或补充任何报告事实。"
-            "严格字段为 style(expert|concise)、emphasized_finding_ids、"
-            "emphasized_recommendation_ids；不得包含其他字段。"
-            f"可用 ID：{json.dumps(allowed, ensure_ascii=False)}"
-        )
-        try:
-            response = self._client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[
-                    {"role": "system", "content": "你是受约束的结构化报告排序器。"},
-                    {"role": "user", "content": prompt},
-                ],
-                response_format={"type": "json_object"},
-                temperature=0,
-            )
-            content = response.choices[0].message.content
-            if not isinstance(content, str):
-                raise ValueError("model response content is missing")
-            validated = EnhancementPlan.model_validate(json.loads(content))
-            if not set(validated.emphasized_finding_ids) <= set(allowed["finding_ids"]):
-                raise ValueError("enhancement plan references an unknown finding id")
-            if not set(validated.emphasized_recommendation_ids) <= set(
-                allowed["recommendation_ids"]
-            ):
-                raise ValueError("enhancement plan references an unknown recommendation id")
-            return validated.model_dump(mode="json")
-        except Exception as exc:
-            logger.warning("report enhancement failed: %s", type(exc).__name__)
-            raise
-
-
-def create_report_enhancer() -> OpenAIReportEnhancer | None:
-    client = get_openai_client()
-    return OpenAIReportEnhancer(client) if client is not None else None
 
 
 def normalize_base_url(base_url: str) -> str:
@@ -429,12 +410,24 @@ async def health() -> dict[str, str]:
 
 @app.post("/api/v1/diagnoses", status_code=202)
 async def create_diagnosis(request: CreateDiagnosisRequest) -> dict[str, Any]:
-    return diagnosis_jobs.create(request.sceneKey, request.dataVersion).public_snapshot()
+    return diagnosis_jobs.create(
+        request.sceneKey,
+        request.dataVersion,
+        force=request.force,
+    ).public_snapshot()
 
 
 @app.get("/api/v1/diagnoses/{job_id}")
 async def get_diagnosis(job_id: str) -> dict[str, Any]:
     record = diagnosis_jobs.get(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="诊断任务不存在")
+    return record.public_snapshot()
+
+
+@app.delete("/api/v1/diagnoses/{job_id}")
+async def cancel_diagnosis(job_id: str) -> dict[str, Any]:
+    record = diagnosis_jobs.cancel(job_id)
     if record is None:
         raise HTTPException(status_code=404, detail="诊断任务不存在")
     return record.public_snapshot()

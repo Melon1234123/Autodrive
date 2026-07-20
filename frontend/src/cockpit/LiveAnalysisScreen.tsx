@@ -1,5 +1,7 @@
 import type { ReactNode, RefObject } from "react";
 import { Activity, ChevronDown } from "lucide-react";
+import LineReveal from "../LineReveal";
+import TextReveal from "../TextReveal";
 import { sceneDisplayName } from "./scene-labels";
 import type { SceneManifestEntry } from "./types";
 
@@ -19,10 +21,10 @@ type LiveAnalysisScreenProps = {
   selectedSceneKey: string;
   sceneLoading: boolean;
   active: boolean;
+  motionReady: boolean;
   videoSlotRef: RefObject<HTMLDivElement | null>;
+  evidenceSlotRef: RefObject<HTMLDivElement | null>;
   monitoring: CockpitMonitoring;
-  lidarSlot: ReactNode;
-  mapSlot: ReactNode;
   historySlot: ReactNode;
   onSceneSelect: (sceneKey: string) => void;
 };
@@ -32,26 +34,18 @@ export function LiveAnalysisScreen({
   selectedSceneKey,
   sceneLoading,
   active,
+  motionReady,
   videoSlotRef,
+  evidenceSlotRef,
   monitoring,
-  lidarSlot,
-  mapSlot,
   historySlot,
   onSceneSelect,
 }: LiveAnalysisScreenProps) {
   return (
     <section className="cockpit-screen cockpit-live" data-cockpit-screen="live" aria-label="实时解析">
       <div className="cockpit-screen__heading cockpit-screen__heading--compact">
-        <div><p className="cockpit-screen__index">02 / 实时解析</p><h2>多模态证据，<em>逐帧同步</em></h2></div>
-        {active ? (
-          <label className="cockpit-scene-select cockpit-scene-select--heading">
-            <span>场景切换</span>
-            <select value={selectedSceneKey} onChange={(event) => onSceneSelect(event.target.value)} disabled={sceneLoading} aria-label="选择数据场景">
-              {scenes.map((scene) => <option value={scene.id} key={scene.id}>{sceneDisplayName(scene)}</option>)}
-            </select>
-            <ChevronDown size={14} aria-hidden="true" />
-          </label>
-        ) : <span className="cockpit-screen__scene">{sceneDisplayName(scenes.find((scene) => scene.id === selectedSceneKey) ?? scenes[0])}</span>}
+        <div><TextReveal tag="p" className="cockpit-screen__index" enabled={motionReady}>02 / 实时解析</TextReveal><LineReveal tag="h2" label="多模态证据，逐帧同步" enabled={motionReady} lines={[<>多模态证据，<em>逐帧同步</em></>]} /></div>
+        {!active ? <span className="cockpit-screen__scene">{sceneDisplayName(scenes.find((scene) => scene.id === selectedSceneKey) ?? scenes[0])}</span> : null}
       </div>
       <div className="cockpit-live__body">
         <div className="cockpit-video-frame cockpit-glass-panel">
@@ -59,15 +53,17 @@ export function LiveAnalysisScreen({
           <div ref={videoSlotRef} className="cockpit-video-slot cockpit-video-slot--analysis" />
         </div>
         <div className="cockpit-live__evidence">
-          <div className="cockpit-evidence-stack">
-            <div className="cockpit-evidence-panel cockpit-glass-panel cockpit-mini-panel">
-              {active ? lidarSlot : null}
-            </div>
-            <div className="cockpit-evidence-panel cockpit-glass-panel cockpit-mini-panel">
-              {active ? mapSlot : null}
-            </div>
-          </div>
+          <div ref={evidenceSlotRef} className="cockpit-evidence-stack cockpit-persistent-evidence-slot" />
           <aside className="cockpit-monitor cockpit-glass-panel" aria-label="实时监测">
+            {active ? (
+              <label className="cockpit-scene-select cockpit-scene-select--monitor">
+                <span>场景切换</span>
+                <select value={selectedSceneKey} onChange={(event) => onSceneSelect(event.target.value)} disabled={sceneLoading} aria-label="选择数据场景">
+                  {scenes.map((scene) => <option value={scene.id} key={scene.id}>{sceneDisplayName(scene)}</option>)}
+                </select>
+                <ChevronDown size={14} aria-hidden="true" />
+              </label>
+            ) : null}
             <div className="cockpit-monitor__title"><Activity size={17} aria-hidden="true" /><span>实时监测</span><strong>{monitoring.frameRiskLabel}</strong></div>
             <div className="cockpit-monitor__overview">
               <span>当前目标<strong>{monitoring.currentObjects}</strong></span>

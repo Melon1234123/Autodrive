@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { CockpitExperience, type CockpitExperienceProps } from "./CockpitExperience";
-import type { DiagnosisReport } from "./types";
+import { reportFixture } from "../features/diagnosis/test-fixtures";
 
 class ResizeObserverMock {
   observe = vi.fn();
@@ -31,34 +31,7 @@ const scenes = [
 
 const onSceneSelect = vi.fn();
 
-const completedReport = {
-  schema_version: "1.0",
-  scene_name: "城市路口侧向超车",
-  data_version: "test-v1",
-  generation_mode: "local-harness",
-  executive_summary: "全场景分析完成。",
-  scene_overview: {},
-  data_quality: [],
-  scores: { perception: 10, motion: 20, control: 30, trajectory: 40, data_quality: 90, overall: 30, confidence: 0.9 },
-  key_findings: [],
-  timeline: [],
-  historical_risk_events: [],
-  perception_analysis: { summary: "感知稳定。", metrics: {}, evidence_ids: [] },
-  motion_control_analysis: { summary: "控制稳定。", metrics: {}, evidence_ids: [] },
-  trajectory_analysis: { summary: "轨迹稳定。", metrics: {}, evidence_ids: [] },
-  causal_chains: [],
-  recommendations: [],
-  regression_tests: [],
-  evidence_index: [{
-    id: "ev-0001",
-    source: "telemetry",
-    provenance: "real-derived",
-    start_time: 12.48,
-    end_time: 12.8,
-    detail: "控制响应证据。",
-  }],
-  limitations: [],
-} satisfies DiagnosisReport;
+const completedReportV2 = reportFixture;
 
 function cockpitProps(overrides: Partial<CockpitExperienceProps> = {}): CockpitExperienceProps {
   return {
@@ -87,8 +60,10 @@ function cockpitProps(overrides: Partial<CockpitExperienceProps> = {}): CockpitE
     historySlot: createElement("div", { "data-testid": "history-slot" }),
     diagnosisSlot: createElement("div", { "data-testid": "diagnosis-slot" }),
     report: null,
-    reportExpanded: false,
+    selectedEvidenceTime: null,
     onSeekReportEvidence: vi.fn(),
+    onReturnToDiagnosis: vi.fn(),
+    onRerunDiagnosis: vi.fn(),
     onSceneSelect,
     onReturnSite: vi.fn(),
     onContact: vi.fn(),
@@ -98,6 +73,13 @@ function cockpitProps(overrides: Partial<CockpitExperienceProps> = {}): CockpitE
 
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+  vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    callback(0);
+    return 1;
+  });
   Object.defineProperty(Element.prototype, "scrollIntoView", {
     configurable: true,
     value: vi.fn(),
@@ -116,14 +98,21 @@ it("renders three named screens and one website-matched navigation", () => {
   expect(screen.getByRole("region", { name: "场景入口" })).toBeInTheDocument();
   expect(screen.getByRole("region", { name: "实时解析" })).toBeInTheDocument();
   expect(screen.getByRole("region", { name: "全域诊断" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "返回官网" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "联系我们" })).toBeInTheDocument();
-  expect(document.querySelectorAll("video")).toHaveLength(1);
+  expect(container.querySelectorAll(".cockpit-experience [data-split-text]")).toHaveLength(0);
+  expect(container.querySelectorAll(".cockpit-experience [data-line-reveal]")).toHaveLength(3);
+  expect(container.querySelectorAll(".cockpit-experience [data-motion-line]")).toHaveLength(4);
+  expect(container.querySelectorAll(".cockpit-experience [data-text-reveal]")).toHaveLength(3);
+  expect(screen.getByRole("heading", { name: "选择一段真实路况，开始证据回放" })).not.toHaveAttribute("data-split-text");
+  expect(screen.getByRole("heading", { name: "多模态证据，逐帧同步" })).not.toHaveAttribute("data-split-text");
+  expect(screen.getByRole("heading", { name: "从关键帧，追溯完整因果链" })).not.toHaveAttribute("data-split-text");
+  expect(screen.getByRole("button", { name: "返回官网" })).toHaveClass("cockpit-nav__return");
+  expect(screen.getByRole("button", { name: "联系我们" })).toHaveClass("cockpit-nav__contact");
+  expect(document.querySelectorAll("video")).toHaveLength(3);
   const liveEvidencePanels = container.querySelectorAll(
     ".cockpit-live .cockpit-evidence-panel",
   );
-  expect(liveEvidencePanels).toHaveLength(2);
-  expect(liveEvidencePanels[1]).not.toHaveClass("map-panel");
+  expect(liveEvidencePanels).toHaveLength(0);
+  expect(container.querySelectorAll("[data-testid='persistent-lidar-panel'], [data-testid='persistent-map-panel']")).toHaveLength(2);
   expect(screen.queryByText("CAM_FRONT")).not.toBeInTheDocument();
   expect(screen.queryByText("PATH SYNC")).not.toBeInTheDocument();
 });
@@ -138,11 +127,18 @@ it("selects a cover scene without scrolling", () => {
   expect(onSceneSelect).toHaveBeenCalledWith("scene-0061");
 });
 
-it("keeps one physical video and only mounts heavy evidence for the active analysis screen", () => {
+it("embeds three synchronized videos and moves one evidence layer without remounting it", () => {
   const { container } = render(createElement(CockpitExperience, cockpitProps()));
-  const video = screen.getByTestId("persistent-scene-video") as HTMLVideoElement;
-  video.currentTime = 8.5;
-  expect(screen.queryByTestId("lidar-slot")).not.toBeInTheDocument();
+  const entryVideo = screen.getByTestId("cockpit-scene-video-entry") as HTMLVideoElement;
+  const liveVideo = screen.getByTestId("cockpit-scene-video-live") as HTMLVideoElement;
+  const diagnosisVideo = screen.getByTestId("cockpit-scene-video-diagnosis") as HTMLVideoElement;
+  expect(entryVideo).toBeInTheDocument();
+  expect(liveVideo).toBeInTheDocument();
+  expect(diagnosisVideo).toBeInTheDocument();
+  const lidar = screen.getByTestId("lidar-slot");
+  const map = screen.getByTestId("map-slot");
+  expect(lidar.parentElement).toHaveClass("cockpit-evidence-panel");
+  expect(lidar.closest(".cockpit-evidence-parking")).toBeInTheDocument();
 
   const root = container.querySelector<HTMLElement>(".cockpit-experience")!;
   const entry = screen.getByRole("region", { name: "场景入口" });
@@ -155,11 +151,52 @@ it("keeps one physical video and only mounts heavy evidence for the active analy
   vi.spyOn(diagnosis, "getBoundingClientRect").mockReturnValue({ top: 1000, height: 1000 } as DOMRect);
   fireEvent.scroll(root);
 
-  expect(screen.getByTestId("persistent-scene-video")).toBe(video);
-  expect(video.currentTime).toBe(8.5);
+  expect(screen.getByTestId("cockpit-scene-video-live")).toBe(liveVideo);
+  expect(container.querySelector(".cockpit-live .persistent-player")).toBeInTheDocument();
+  expect(container.querySelector(".cockpit-live .persistent-player")?.classList).not.toContain("persistent-player--fixed");
   expect(screen.getAllByTestId("lidar-slot")).toHaveLength(1);
   expect(screen.getAllByTestId("map-slot")).toHaveLength(1);
-  expect(container.querySelector(".camera-targets")).toBeInTheDocument();
+  expect(screen.getByTestId("lidar-slot")).toBe(lidar);
+  expect(screen.getByTestId("map-slot")).toBe(map);
+  expect(lidar.closest(".cockpit-live__evidence")).toBeInTheDocument();
+
+  Object.defineProperty(root, "scrollTop", { configurable: true, value: 2000, writable: true });
+  vi.mocked(entry.getBoundingClientRect).mockReturnValue({ top: -2000, height: 1000 } as DOMRect);
+  vi.mocked(live.getBoundingClientRect).mockReturnValue({ top: -1000, height: 1000 } as DOMRect);
+  vi.mocked(diagnosis.getBoundingClientRect).mockReturnValue({ top: 0, height: 1000 } as DOMRect);
+  fireEvent.scroll(root);
+
+  expect(screen.getByTestId("lidar-slot")).toBe(lidar);
+  expect(screen.getByTestId("map-slot")).toBe(map);
+  expect(lidar.closest(".cockpit-diagnosis__evidence")).toBeInTheDocument();
+});
+
+it("prepares incoming 02 and 03 content before the scroll transition reaches them", () => {
+  const { container } = render(createElement(CockpitExperience, cockpitProps()));
+  const root = container.querySelector<HTMLElement>(".cockpit-experience")!;
+  const entry = screen.getByRole("region", { name: "场景入口" });
+  const live = screen.getByRole("region", { name: "实时解析" });
+  const diagnosis = screen.getByRole("region", { name: "全域诊断" });
+  Object.defineProperty(root, "scrollTop", { configurable: true, value: 0, writable: true });
+  vi.spyOn(root, "getBoundingClientRect").mockReturnValue({ top: 0, height: 1000 } as DOMRect);
+  vi.spyOn(entry, "getBoundingClientRect").mockReturnValue({ top: 0, height: 1000 } as DOMRect);
+  vi.spyOn(live, "getBoundingClientRect").mockReturnValue({ top: 1000, height: 1000 } as DOMRect);
+  vi.spyOn(diagnosis, "getBoundingClientRect").mockReturnValue({ top: 2000, height: 1000 } as DOMRect);
+
+  fireEvent.keyDown(window, { key: "PageDown", cancelable: true });
+
+  expect(root).toHaveAttribute("data-active-screen", "entry");
+  expect(live.querySelector("[data-testid='persistent-cockpit-evidence']")).toBeInTheDocument();
+
+  root.scrollTop = 1000;
+  vi.mocked(entry.getBoundingClientRect).mockReturnValue({ top: -1000, height: 1000 } as DOMRect);
+  vi.mocked(live.getBoundingClientRect).mockReturnValue({ top: 0, height: 1000 } as DOMRect);
+  vi.mocked(diagnosis.getBoundingClientRect).mockReturnValue({ top: 1000, height: 1000 } as DOMRect);
+  fireEvent.scroll(root);
+  fireEvent.keyDown(window, { key: "PageDown", cancelable: true });
+
+  expect(root).toHaveAttribute("data-active-screen", "live");
+  expect(diagnosis.querySelector("[data-testid='persistent-cockpit-evidence']")).toBeInTheDocument();
 });
 
 it.each([
@@ -183,49 +220,149 @@ it.each([
   fireEvent.scroll(root);
   const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
 
-  fireEvent.change(screen.getByRole("combobox", { name: "选择数据场景" }), {
-    target: { value: "scene-0061" },
-  });
+  if (activeScreen === "live") {
+    expect(live.querySelector(".cockpit-monitor .cockpit-scene-select")).toBeInTheDocument();
+    expect(live.querySelector(".cockpit-screen__heading .cockpit-scene-select")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "选择数据场景" }), {
+      target: { value: "scene-0061" },
+    });
+    expect(onSceneSelect).toHaveBeenCalledWith("scene-0061");
+  } else {
+    expect(diagnosis.querySelector(".cockpit-scene-select")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "选择数据场景" })).not.toBeInTheDocument();
+    expect(diagnosis.querySelector(".cockpit-diagnosis__buttons")).not.toBeInTheDocument();
+    expect(diagnosis.querySelector(".cockpit-diagnosis__action .panel-title svg")).not.toBeInTheDocument();
+  }
 
-  expect(onSceneSelect).toHaveBeenCalledWith("scene-0061");
   expect(root).toHaveAttribute("data-active-screen", activeScreen);
   expect(root.scrollTop).toBe(scrollTop);
   expect(scroll).not.toHaveBeenCalled();
   expect(screen.getByRole("region", { name: screenName })).toBeInTheDocument();
 });
 
-it("scrolls to each completed report once and returns to evidence after a time seek", () => {
+it("mounts report once and scrolls once after completion", () => {
+  const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+  const { container, rerender } = render(createElement(CockpitExperience, cockpitProps()));
+
+  rerender(createElement(CockpitExperience, cockpitProps({ report: completedReportV2 })));
+  expect(screen.getByRole("region", { name: "诊断报告" })).toBeInTheDocument();
+  expect(container.querySelector(".cockpit-diagnosis__report-drawer")).not.toBeInTheDocument();
+  expect(container.querySelector(".cockpit-screen[data-cockpit-screen='report']")).toBeInTheDocument();
+  expect(container.querySelector(".cockpit-experience")).toHaveAttribute("data-active-screen", "report");
+  expect(scroll).toHaveBeenCalledTimes(1);
+
+  rerender(createElement(CockpitExperience, cockpitProps({ report: completedReportV2 })));
+  expect(scroll).toHaveBeenCalledTimes(1);
+});
+
+it("returns from report without resetting scene playback or persistent evidence", () => {
+  const onReturnToDiagnosis = vi.fn();
   const onSeekReportEvidence = vi.fn();
-  const { container, rerender } = render(createElement(CockpitExperience, cockpitProps({ onSeekReportEvidence })));
-  const reportAnchor = container.querySelector<HTMLElement>(".cockpit-diagnosis__report-anchor")!;
-  const evidenceAnchor = container.querySelector<HTMLElement>(".cockpit-diagnosis .cockpit-screen__heading")!;
-  const reportScroll = vi.spyOn(reportAnchor, "scrollIntoView");
-  const evidenceScroll = vi.spyOn(evidenceAnchor, "scrollIntoView");
-
-  rerender(createElement(CockpitExperience, cockpitProps({
-    report: completedReport,
-    reportExpanded: true,
+  const { container } = render(createElement(CockpitExperience, cockpitProps({
+    report: completedReportV2,
+    selectedEvidenceTime: 1,
+    onReturnToDiagnosis,
     onSeekReportEvidence,
   })));
-  expect(reportScroll).toHaveBeenCalledTimes(1);
+  const entryVideo = screen.getByTestId("cockpit-scene-video-entry") as HTMLVideoElement;
+  const liveVideo = screen.getByTestId("cockpit-scene-video-live") as HTMLVideoElement;
+  const diagnosisVideo = screen.getByTestId("cockpit-scene-video-diagnosis") as HTMLVideoElement;
+  const reportVideo = screen.getByTestId("cockpit-scene-video-report") as HTMLVideoElement;
+  const lidar = screen.getByTestId("lidar-slot");
+  const map = screen.getByTestId("map-slot");
+  Object.defineProperty(diagnosisVideo, "readyState", {
+    configurable: true,
+    value: HTMLMediaElement.HAVE_METADATA,
+  });
+  reportVideo.currentTime = 1;
+  fireEvent.timeUpdate(reportVideo);
+  diagnosisVideo.currentTime = 1;
 
-  rerender(createElement(CockpitExperience, cockpitProps({
-    report: completedReport,
-    reportExpanded: true,
+  fireEvent.click(screen.getByRole("button", { name: "返回 03" }));
+
+  expect(container.querySelector(".cockpit-experience")).toHaveAttribute("data-active-screen", "diagnosis");
+  expect(onSeekReportEvidence).toHaveBeenCalledWith(1);
+  expect(onReturnToDiagnosis).toHaveBeenCalledWith(1);
+  expect(screen.getByTestId("cockpit-scene-video-entry")).toBe(entryVideo);
+  expect(screen.getByTestId("cockpit-scene-video-live")).toBe(liveVideo);
+  expect(screen.getByTestId("cockpit-scene-video-diagnosis")).toBe(diagnosisVideo);
+  expect(screen.getByTestId("lidar-slot")).toBe(lidar);
+  expect(screen.getByTestId("map-slot")).toBe(map);
+  expect(diagnosisVideo.currentTime).toBe(1);
+});
+
+it("keeps report evidence seeks in screen 04 and seeks diagnosis once on return", () => {
+  const onSeekReportEvidence = vi.fn();
+  const { container } = render(createElement(CockpitExperience, cockpitProps({
+    report: completedReportV2,
     onSeekReportEvidence,
   })));
-  expect(reportScroll).toHaveBeenCalledTimes(1);
+  const reportVideo = screen.getByTestId("cockpit-scene-video-report") as HTMLVideoElement;
+  const diagnosisVideo = screen.getByTestId("cockpit-scene-video-diagnosis") as HTMLVideoElement;
+  Object.defineProperty(reportVideo, "readyState", {
+    configurable: true,
+    value: HTMLMediaElement.HAVE_METADATA,
+  });
+  Object.defineProperty(diagnosisVideo, "readyState", {
+    configurable: true,
+    value: HTMLMediaElement.HAVE_METADATA,
+  });
+  const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+  scroll.mockClear();
 
-  fireEvent.click(screen.getByRole("button", { name: "12.48 秒" }));
-  expect(onSeekReportEvidence).toHaveBeenCalledWith(12.48);
-  expect(evidenceScroll).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+  fireEvent.click(screen.getByRole("button", { name: "回放 1.00 秒证据" }));
+
+  expect(container.querySelector(".cockpit-experience")).toHaveAttribute("data-active-screen", "report");
+  expect(onSeekReportEvidence).toHaveBeenCalledWith(1);
+  expect(reportVideo.currentTime).toBe(1);
+  expect(scroll).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: "返回 03" }));
+
+  expect(container.querySelector(".cockpit-experience")).toHaveAttribute("data-active-screen", "diagnosis");
+  expect(diagnosisVideo.currentTime).toBe(1);
+  expect(scroll).toHaveBeenCalledTimes(1);
+});
+
+it("uses instant motion when reduced-motion users return from report to diagnosis", () => {
+  vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
+  const { container } = render(createElement(CockpitExperience, cockpitProps({ report: completedReportV2 })));
+  const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+  scroll.mockClear();
+
+  fireEvent.click(screen.getByRole("button", { name: "返回 03" }));
+
+  expect(container.querySelector(".cockpit-experience")).toHaveAttribute("data-active-screen", "diagnosis");
+  expect(scroll).toHaveBeenCalledWith({ behavior: "auto", block: "start" });
+});
+
+it("returns to diagnosis before rerunning and resets report auto-scroll tracking when the report clears", () => {
+  const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+  let activeScreenDuringRerun: string | null = null;
+  const { container, rerender } = render(createElement(CockpitExperience, cockpitProps({
+    report: completedReportV2,
+    onRerunDiagnosis: () => {
+      activeScreenDuringRerun = container.querySelector(".cockpit-experience")?.getAttribute("data-active-screen") ?? null;
+    },
+  })));
+  expect(scroll).toHaveBeenCalledTimes(1);
+
+  fireEvent.click(screen.getByRole("button", { name: "重新诊断" }));
+
+  expect(activeScreenDuringRerun).toBe("diagnosis");
+  expect(container.querySelector(".cockpit-experience")).toHaveAttribute("data-active-screen", "diagnosis");
+
+  rerender(createElement(CockpitExperience, cockpitProps({ report: null })));
+  expect(container.querySelector(".cockpit-experience")).toHaveAttribute("data-active-screen", "diagnosis");
+
+  rerender(createElement(CockpitExperience, cockpitProps({ report: completedReportV2 })));
+  expect(container.querySelector(".cockpit-experience")).toHaveAttribute("data-active-screen", "report");
+  expect(scroll).toHaveBeenCalledTimes(3);
 });
 
 it("keeps scene selection usable and the video node stable after a media error", () => {
-  vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
-  vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
   const view = render(createElement(CockpitExperience, cockpitProps()));
-  const video = screen.getByTestId("persistent-scene-video") as HTMLVideoElement;
+  const video = screen.getByTestId("cockpit-scene-video-entry") as HTMLVideoElement;
 
   fireEvent.error(video);
   expect(screen.getByRole("alert")).toHaveTextContent("场景视频加载失败");
@@ -247,6 +384,6 @@ it("keeps scene selection usable and the video node stable after a media error",
   fireEvent.canPlay(video);
 
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  expect(screen.getByTestId("persistent-scene-video")).toBe(video);
-  expect(document.querySelectorAll("video")).toHaveLength(1);
+  expect(screen.getByTestId("cockpit-scene-video-entry")).toBe(video);
+  expect(document.querySelectorAll("video")).toHaveLength(3);
 });

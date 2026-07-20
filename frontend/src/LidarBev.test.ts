@@ -71,6 +71,12 @@ afterEach(() => {
 });
 
 describe("LidarBev", () => {
+  it("marks the rendered shell with its active scene id", () => {
+    render(createElement(LidarBev, baseProps));
+
+    expect(document.querySelector(".lidar-bev-shell")).toHaveAttribute("data-scene-id", "scene-a");
+  });
+
   it("keeps detection overlays unrotated while rotating raw points clockwise", () => {
     expect(lidarToWorldGround(10, 4, 0, 0)).toEqual({ x: 4, z: 10 });
     expect(lidarPointToWorldGround(10, 4, 0, 0)).toEqual({ x: -10, z: 4 });
@@ -118,6 +124,21 @@ describe("LidarBev", () => {
     expect(ResizeObserverDouble.instances).toHaveLength(1);
     expect(ResizeObserverDouble.instances[0].observe).toHaveBeenCalledTimes(1);
     expect(ResizeObserverDouble.instances[0].disconnect).not.toHaveBeenCalled();
+    expect(threeHarness.renderer.dispose).not.toHaveBeenCalled();
+  });
+
+  it("keeps the decoded point cloud layer when only perception boxes advance", () => {
+    const view = render(createElement(LidarBev, baseProps));
+    const [scene] = threeHarness.renderer.render.mock.calls[0];
+    const cloudLayer = scene.children[1] as Group;
+    const pointCloud = cloudLayer.children.find((child) => child instanceof Points);
+
+    view.rerender(createElement(LidarBev, {
+      ...baseProps,
+      frame: { time: 0.5, objects: [] },
+    }));
+
+    expect(cloudLayer.children.find((child) => child instanceof Points)).toBe(pointCloud);
     expect(threeHarness.renderer.dispose).not.toHaveBeenCalled();
   });
 

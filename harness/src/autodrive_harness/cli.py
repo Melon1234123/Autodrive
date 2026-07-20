@@ -11,12 +11,12 @@ from .pipeline import run_scene_diagnosis
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="autodrive-diagnose",
-        description="Generate a deterministic evidence-grounded scene diagnosis report.",
+        description="Generate a deterministic facts-first ReportV2 diagnosis.",
     )
     parser.add_argument("--public-root", required=True, type=Path)
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--scene-key", required=True)
-    parser.add_argument("--data-version", default="local-v1")
+    parser.add_argument("--data-version", default="local-v2")
     parser.add_argument("--output", required=True, type=Path)
     return parser
 

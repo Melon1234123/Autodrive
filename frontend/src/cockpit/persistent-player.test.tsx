@@ -2,34 +2,23 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createRef } from "react";
+import type { RefObject } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PersistentScenePlayer } from "./PersistentScenePlayer";
 import type { CockpitScreen } from "./types";
 
 class ResizeObserverDouble {
-  static instances: ResizeObserverDouble[] = [];
-
   readonly observe = vi.fn();
   readonly disconnect = vi.fn();
 
-  constructor(readonly callback: ResizeObserverCallback) {
-    ResizeObserverDouble.instances.push(this);
-  }
-
-  trigger() {
-    this.callback([], this as unknown as ResizeObserver);
-  }
+  constructor(readonly callback: ResizeObserverCallback) {}
 }
 
 const slots = {
   entry: createRef<HTMLDivElement>(),
   live: createRef<HTMLDivElement>(),
   diagnosis: createRef<HTMLDivElement>(),
-};
-
-const scrollRoots = {
-  first: createRef<HTMLDivElement>(),
-  second: createRef<HTMLDivElement>(),
+  report: createRef<HTMLDivElement>(),
 };
 
 function Harness({
@@ -37,31 +26,36 @@ function Harness({
   sceneKey,
   src,
   onTimeChange = vi.fn(),
-  scrollRoot = "first",
+  videoRef,
+  reportMounted = false,
+  seekTime = null,
 }: {
   activeScreen: CockpitScreen;
   sceneKey: string;
   src: string;
   onTimeChange?: (currentTime: number) => void;
-  scrollRoot?: keyof typeof scrollRoots;
+  videoRef?: RefObject<HTMLVideoElement | null>;
+  reportMounted?: boolean;
+  seekTime?: number | null;
 }) {
   return (
     <>
-      <div ref={scrollRoots.first} data-testid="first-scroll-root" style={{ overflow: "auto" }}>
+      <div data-testid="cockpit-root">
         <div ref={slots.entry} data-testid="entry-slot" />
         <div ref={slots.live} data-testid="live-slot" />
         <div ref={slots.diagnosis} data-testid="diagnosis-slot" />
+        {reportMounted ? <div ref={slots.report} data-testid="report-slot" /> : null}
       </div>
-      <div ref={scrollRoots.second} data-testid="second-scroll-root" style={{ overflow: "auto" }} />
       <PersistentScenePlayer
         activeScreen={activeScreen}
         sceneKey={sceneKey}
         src={src}
         slots={slots}
-        scrollRootRef={scrollRoots[scrollRoot]}
         showDetections={false}
         objects={[]}
+        videoRef={videoRef}
         onTimeChange={onTimeChange}
+        seekTime={seekTime}
       />
     </>
   );
@@ -69,27 +63,40 @@ function Harness({
 
 const drawImage = vi.fn();
 
-function setMediaCompletion(
-  video: HTMLVideoElement,
-  source: string,
-  readyState: number = HTMLMediaElement.HAVE_FUTURE_DATA,
-) {
+function videos() {
+  return {
+    entry: screen.getByTestId("cockpit-scene-video-entry") as HTMLVideoElement,
+    live: screen.getByTestId("cockpit-scene-video-live") as HTMLVideoElement,
+    diagnosis: screen.getByTestId("cockpit-scene-video-diagnosis") as HTMLVideoElement,
+  };
+}
+
+function reportVideo() {
+  return screen.getByTestId("cockpit-scene-video-report") as HTMLVideoElement;
+}
+
+function setReady(video: HTMLVideoElement, readyState: number = HTMLMediaElement.HAVE_FUTURE_DATA) {
+  Object.defineProperty(video, "readyState", { configurable: true, value: readyState });
+  Object.defineProperty(video, "currentSrc", {
+    configurable: true,
+    value: new URL(video.getAttribute("src") ?? "", window.location.href).href,
+  });
+}
+
+function setSourceCompletion(video: HTMLVideoElement, source: string, readyState: number = HTMLMediaElement.HAVE_FUTURE_DATA) {
   Object.defineProperty(video, "currentSrc", {
     configurable: true,
     value: source ? new URL(source, window.location.href).href : "",
   });
-  Object.defineProperty(video, "readyState", {
-    configurable: true,
-    value: readyState,
-  });
+  Object.defineProperty(video, "readyState", { configurable: true, value: readyState });
 }
 
 beforeEach(() => {
-  ResizeObserverDouble.instances = [];
-  drawImage.mockReset();
   vi.stubGlobal("ResizeObserver", ResizeObserverDouble);
+  drawImage.mockReset();
   vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
     drawImage,
   } as unknown as CanvasRenderingContext2D);
@@ -101,222 +108,219 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("keeps the same physical video and playback state while the active screen changes", () => {
+it("embeds one video in each screen and keeps the active video ref current", () => {
+  const externalVideoRef = createRef<HTMLVideoElement>();
   const { rerender } = render(
-    <Harness activeScreen="entry" sceneKey="default" src="/sample.mp4" />,
+    <Harness
+      activeScreen="entry"
+      sceneKey="default"
+      src="/sample.mp4"
+      videoRef={externalVideoRef}
+    />,
   );
-  const video = screen.getByTestId("persistent-scene-video") as HTMLVideoElement;
-  Object.defineProperty(video, "currentTime", { value: 7.25, writable: true });
-  Object.defineProperty(video, "playbackRate", { value: 1.5, writable: true });
-  vi.spyOn(video, "paused", "get").mockReturnValue(false);
-  const entryObserver = ResizeObserverDouble.instances.at(-1)!;
-  const observerCount = ResizeObserverDouble.instances.length;
-  expect(video).toHaveAttribute("autoplay");
 
-  rerender(<Harness activeScreen="live" sceneKey="default" src="/sample.mp4" />);
-
-  expect(screen.getAllByTestId("persistent-scene-video")).toHaveLength(1);
-  expect(document.querySelectorAll("video")).toHaveLength(1);
-  expect(screen.getByTestId("persistent-scene-video")).toBe(video);
-  expect(video.currentTime).toBe(7.25);
-  expect(video.playbackRate).toBe(1.5);
-  expect(video.paused).toBe(false);
-  expect(video.load).not.toHaveBeenCalled();
-  expect(video.play).not.toHaveBeenCalled();
-  expect(entryObserver.disconnect).toHaveBeenCalledOnce();
-  expect(ResizeObserverDouble.instances).toHaveLength(observerCount + 1);
-  expect(ResizeObserverDouble.instances.at(-1)!.observe).toHaveBeenCalledWith(slots.live.current);
-});
-
-it("ignores a source prop change until sceneKey changes", () => {
-  const { rerender } = render(
-    <Harness activeScreen="live" sceneKey="default" src="/sample.mp4" />,
-  );
-  const video = screen.getByTestId("persistent-scene-video") as HTMLVideoElement;
-
-  rerender(<Harness activeScreen="live" sceneKey="default" src="/unexpected.mp4" />);
-
-  expect(video.getAttribute("src")).toBe("/sample.mp4");
-  expect(video.load).not.toHaveBeenCalled();
-});
-
-it("captures a static frame, changes source, and resets only when sceneKey changes", () => {
-  const { rerender } = render(
-    <Harness activeScreen="live" sceneKey="default" src="/sample.mp4" />,
-  );
-  const video = screen.getByTestId("persistent-scene-video") as HTMLVideoElement;
-  const originalVideo = video;
-  Object.defineProperty(video, "videoWidth", { value: 1280, configurable: true });
-  Object.defineProperty(video, "videoHeight", { value: 720, configurable: true });
-  Object.defineProperty(video, "currentTime", { value: 9, writable: true });
+  expect(document.querySelectorAll("video")).toHaveLength(3);
+  expect(externalVideoRef.current).toBe(videos().entry);
+  expect(videos().entry).toHaveAttribute("autoplay");
+  expect(videos().live).not.toHaveAttribute("autoplay");
+  expect(videos().diagnosis).not.toHaveAttribute("autoplay");
 
   rerender(
     <Harness
-      activeScreen="diagnosis"
-      sceneKey="scene-0061"
-      src="/scenes/scene-0061/sample.mp4"
+      activeScreen="live"
+      sceneKey="default"
+      src="/sample.mp4"
+      videoRef={externalVideoRef}
     />,
   );
 
-  const freeze = screen.getByTestId("persistent-scene-freeze") as HTMLCanvasElement;
-  expect(screen.getByTestId("persistent-scene-video")).toBe(originalVideo);
-  expect(document.querySelectorAll("video")).toHaveLength(1);
-  expect(drawImage).toHaveBeenCalledWith(video, 0, 0, 1280, 720);
-  expect(freeze).toHaveAttribute("width", "1280");
-  expect(freeze).toHaveAttribute("height", "720");
-  expect(freeze.hidden).toBe(false);
-  expect(video.getAttribute("src")).toBe("/scenes/scene-0061/sample.mp4");
-  expect(video.currentTime).toBe(0);
-  expect(video.load).toHaveBeenCalledOnce();
-
-  setMediaCompletion(video, "/scenes/scene-0061/sample.mp4");
-  fireEvent.canPlay(video);
-  expect(freeze.hidden).toBe(true);
-  expect(video.play).toHaveBeenCalledOnce();
+  expect(document.querySelectorAll("video")).toHaveLength(3);
+  expect(externalVideoRef.current).toBe(videos().live);
+  expect(videos().entry).toHaveAttribute("src", "/sample.mp4");
+  expect(videos().live).toHaveAttribute("src", "/sample.mp4");
+  expect(videos().diagnosis).toHaveAttribute("src", "/sample.mp4");
+  expect(HTMLMediaElement.prototype.load).not.toHaveBeenCalled();
 });
 
-it("tracks geometry from the internal scroll root and cleans up when that root changes", () => {
+it("synchronizes embedded videos from the active video's time axis", () => {
   const onTimeChange = vi.fn();
-  let entryRect = {
-    left: 16,
-    top: 24,
-    width: 640,
-    height: 360,
-    right: 656,
-    bottom: 384,
-    x: 16,
-    y: 24,
-    toJSON: () => ({}),
-  };
-  const view = render(
-    <Harness
-      activeScreen="entry"
-      sceneKey="default"
-      src="/sample.mp4"
-      onTimeChange={onTimeChange}
-    />,
+  render(
+    <Harness activeScreen="entry" sceneKey="default" src="/sample.mp4" onTimeChange={onTimeChange} />,
   );
-  vi.spyOn(slots.entry.current!, "getBoundingClientRect").mockImplementation(() => entryRect);
-
-  fireEvent.scroll(screen.getByTestId("first-scroll-root"));
-
-  const player = screen.getByTestId("persistent-scene-player");
-  const video = screen.getByTestId("persistent-scene-video") as HTMLVideoElement;
-  video.currentTime = 4.5;
-  fireEvent.timeUpdate(video);
-  expect(player).toHaveStyle({
-    left: "16px",
-    top: "24px",
-    width: "640px",
-    height: "360px",
-    borderRadius: "8px",
+  const current = videos();
+  Object.values(current).forEach((video) => {
+    setReady(video);
+    video.currentTime = 0;
   });
+
+  current.entry.currentTime = 4.5;
+  fireEvent.timeUpdate(current.entry);
+
+  expect(current.live.currentTime).toBe(4.5);
+  expect(current.diagnosis.currentTime).toBe(4.5);
   expect(onTimeChange).toHaveBeenCalledWith(4.5);
+});
 
-  entryRect = { ...entryRect, left: 48, right: 688 };
-  fireEvent.scroll(screen.getByTestId("first-scroll-root"));
-  expect(player).toHaveStyle({ left: "48px" });
-
-  const observer = ResizeObserverDouble.instances.at(-1)!;
-  const firstRoot = scrollRoots.first.current!;
-  const removeEventListener = vi.spyOn(firstRoot, "removeEventListener");
-  view.rerender(
+it("keeps playback state and time when the page changes", () => {
+  const externalVideoRef = createRef<HTMLVideoElement>();
+  const { rerender } = render(
     <Harness
       activeScreen="entry"
       sceneKey="default"
       src="/sample.mp4"
-      onTimeChange={onTimeChange}
-      scrollRoot="second"
+      videoRef={externalVideoRef}
     />,
   );
-  expect(removeEventListener).toHaveBeenCalledWith("scroll", expect.any(Function));
-  expect(observer.disconnect).toHaveBeenCalledOnce();
+  const current = videos();
+  Object.values(current).forEach((video) => setReady(video));
+  current.entry.currentTime = 7.25;
+  current.entry.playbackRate = 1.5;
+  vi.spyOn(current.entry, "paused", "get").mockReturnValue(false);
+  fireEvent.play(current.entry);
+  vi.mocked(current.entry.play).mockClear();
+  vi.mocked(current.entry.pause).mockClear();
 
-  const activeObserver = ResizeObserverDouble.instances.at(-1)!;
-  view.unmount();
-  expect(activeObserver.disconnect).toHaveBeenCalledOnce();
+  rerender(
+    <Harness
+      activeScreen="live"
+      sceneKey="default"
+      src="/sample.mp4"
+      videoRef={externalVideoRef}
+    />,
+  );
+
+  expect(externalVideoRef.current).toBe(current.live);
+  expect(current.live.currentTime).toBe(7.25);
+  expect(current.live.playbackRate).toBe(1.5);
+  expect(current.entry.load).not.toHaveBeenCalled();
+  expect(current.live.load).not.toHaveBeenCalled();
+  expect(current.diagnosis.load).not.toHaveBeenCalled();
+  expect(current.live.play).toHaveBeenCalledOnce();
 });
 
-it("ignores a stale canplay completion during a rapid B to C scene change", () => {
+it("adds a synchronized report video only when its slot mounts without resetting the first three videos", () => {
+  const { rerender } = render(
+    <Harness activeScreen="diagnosis" sceneKey="default" src="/sample.mp4" />,
+  );
+  const original = videos();
+  Object.values(original).forEach((video) => setReady(video));
+  original.diagnosis.currentTime = 6.5;
+  fireEvent.timeUpdate(original.diagnosis);
+
+  rerender(
+    <Harness activeScreen="report" sceneKey="default" src="/sample.mp4" reportMounted />,
+  );
+
+  const report = reportVideo();
+  setReady(report);
+  fireEvent.canPlay(report);
+  expect(document.querySelectorAll("video")).toHaveLength(4);
+  expect(videos().entry).toBe(original.entry);
+  expect(videos().live).toBe(original.live);
+  expect(videos().diagnosis).toBe(original.diagnosis);
+  expect(report.currentTime).toBe(6.5);
+  expect(original.entry.load).not.toHaveBeenCalled();
+  expect(original.live.load).not.toHaveBeenCalled();
+  expect(original.diagnosis.load).not.toHaveBeenCalled();
+
+  rerender(
+    <Harness activeScreen="diagnosis" sceneKey="default" src="/sample.mp4" reportMounted />,
+  );
+  expect(videos().diagnosis.currentTime).toBe(6.5);
+});
+
+it("applies an evidence seek to the shared timeline before returning to diagnosis", () => {
+  const { rerender } = render(
+    <Harness activeScreen="report" sceneKey="default" src="/sample.mp4" reportMounted />,
+  );
+  const current = videos();
+  const report = reportVideo();
+  [...Object.values(current), report].forEach((video) => setReady(video));
+
+  rerender(
+    <Harness activeScreen="report" sceneKey="default" src="/sample.mp4" reportMounted seekTime={7.25} />,
+  );
+
+  expect(report.currentTime).toBe(7.25);
+  expect(current.diagnosis.currentTime).toBe(7.25);
+
+  rerender(
+    <Harness activeScreen="diagnosis" sceneKey="default" src="/sample.mp4" reportMounted seekTime={7.25} />,
+  );
+  expect(current.diagnosis.currentTime).toBe(7.25);
+});
+
+it("changes all embedded sources and resets all videos only when sceneKey changes", () => {
+  const { rerender } = render(
+    <Harness activeScreen="live" sceneKey="default" src="/sample.mp4" />,
+  );
+  const current = videos();
+  Object.values(current).forEach((video) => {
+    setReady(video);
+    video.currentTime = 9;
+    Object.defineProperty(video, "videoWidth", { configurable: true, value: 1280 });
+    Object.defineProperty(video, "videoHeight", { configurable: true, value: 720 });
+  });
+  fireEvent.timeUpdate(current.live);
+
+  rerender(
+    <Harness activeScreen="live" sceneKey="scene-0061" src="/scenes/scene-0061/sample.mp4" />,
+  );
+
+  Object.values(current).forEach((video) => {
+    expect(video).toHaveAttribute("src", "/scenes/scene-0061/sample.mp4");
+    expect(video.currentTime).toBe(0);
+    expect(video.load).toHaveBeenCalledTimes(3);
+  });
+  setSourceCompletion(current.live, "/scenes/scene-0061/sample.mp4");
+  fireEvent.canPlay(current.live);
+  expect(current.live.currentTime).toBe(0);
+  expect(drawImage).toHaveBeenCalledTimes(3);
+});
+
+it("ignores a stale canplay event and starts the active scene after it is ready", () => {
   const { rerender } = render(
     <Harness activeScreen="live" sceneKey="scene-a" src="/scenes/a.mp4" />,
   );
-  const video = screen.getByTestId("persistent-scene-video") as HTMLVideoElement;
-  Object.defineProperty(video, "videoWidth", { value: 1280, configurable: true });
-  Object.defineProperty(video, "videoHeight", { value: 720, configurable: true });
-  let completedSource = "";
-  let readyState: number = HTMLMediaElement.HAVE_NOTHING;
-  Object.defineProperty(video, "currentSrc", {
-    configurable: true,
-    get: () => completedSource,
-  });
-  Object.defineProperty(video, "readyState", {
-    configurable: true,
-    get: () => readyState,
+  const current = videos();
+  Object.values(current).forEach((video) => {
+    Object.defineProperty(video, "videoWidth", { configurable: true, value: 1280 });
+    Object.defineProperty(video, "videoHeight", { configurable: true, value: 720 });
   });
 
   rerender(<Harness activeScreen="live" sceneKey="scene-b" src="/scenes/b.mp4" />);
-  rerender(<Harness activeScreen="live" sceneKey="scene-c" src="/scenes/c.mp4" />);
+  setSourceCompletion(current.live, "/scenes/a.mp4");
+  fireEvent.canPlay(current.live);
+  expect(current.live.play).not.toHaveBeenCalled();
 
-  const freeze = screen.getByTestId("persistent-scene-freeze") as HTMLCanvasElement;
-  readyState = HTMLMediaElement.HAVE_FUTURE_DATA;
-  fireEvent.canPlay(video);
-  expect(freeze.hidden).toBe(false);
-  expect(video.play).not.toHaveBeenCalled();
+  setSourceCompletion(current.live, "/scenes/b.mp4", HTMLMediaElement.HAVE_CURRENT_DATA);
+  fireEvent.canPlay(current.live);
+  expect(current.live.play).not.toHaveBeenCalled();
 
-  completedSource = new URL("/scenes/c.mp4", window.location.href).href;
-  readyState = HTMLMediaElement.HAVE_CURRENT_DATA;
-  fireEvent.canPlay(video);
-  expect(freeze.hidden).toBe(false);
-  expect(video.play).not.toHaveBeenCalled();
-
-  readyState = HTMLMediaElement.HAVE_FUTURE_DATA;
-  fireEvent.canPlay(video);
-  expect(freeze.hidden).toBe(true);
-  expect(video.play).toHaveBeenCalledOnce();
-  expect(video.currentTime).toBe(0);
-  expect(video.load).toHaveBeenCalledTimes(2);
+  setSourceCompletion(current.live, "/scenes/b.mp4");
+  fireEvent.canPlay(current.live);
+  expect(current.live.play).toHaveBeenCalledOnce();
+  expect(screen.getByTestId("cockpit-scene-freeze-live")).not.toBeVisible();
 });
 
-it("absorbs an autoplay rejection after the current scene becomes playable", async () => {
-  vi.mocked(HTMLMediaElement.prototype.play).mockRejectedValueOnce(
-    new DOMException("autoplay blocked", "NotAllowedError"),
-  );
+it("surfaces an active scene error and clears it when the replacement is ready", () => {
   const { rerender } = render(
     <Harness activeScreen="live" sceneKey="scene-a" src="/scenes/a.mp4" />,
   );
-  const video = screen.getByTestId("persistent-scene-video") as HTMLVideoElement;
-
-  rerender(<Harness activeScreen="live" sceneKey="scene-b" src="/scenes/b.mp4" />);
-  setMediaCompletion(video, "/scenes/b.mp4");
-  fireEvent.canPlay(video);
-  await Promise.resolve();
-
-  expect(video.play).toHaveBeenCalledOnce();
-  expect(screen.getByTestId("persistent-scene-freeze")).not.toBeVisible();
-});
-
-it("surfaces a scene error, keeps the last frame, and recovers with one video", () => {
-  const { rerender } = render(
-    <Harness activeScreen="live" sceneKey="scene-a" src="/scenes/a.mp4" />,
-  );
-  const video = screen.getByTestId("persistent-scene-video") as HTMLVideoElement;
-  Object.defineProperty(video, "videoWidth", { value: 1280, configurable: true });
-  Object.defineProperty(video, "videoHeight", { value: 720, configurable: true });
+  const current = videos();
+  Object.defineProperty(current.live, "videoWidth", { configurable: true, value: 1280 });
+  Object.defineProperty(current.live, "videoHeight", { configurable: true, value: 720 });
 
   rerender(<Harness activeScreen="live" sceneKey="scene-b" src="/scenes/missing.mp4" />);
-  setMediaCompletion(video, "/scenes/missing.mp4", HTMLMediaElement.HAVE_NOTHING);
-  fireEvent.error(video);
-
+  setSourceCompletion(current.live, "/scenes/missing.mp4", HTMLMediaElement.HAVE_NOTHING);
+  fireEvent.error(current.live);
   expect(screen.getByRole("alert")).toHaveTextContent("场景视频加载失败");
-  expect(screen.getByTestId("persistent-scene-freeze")).toBeVisible();
-  expect(document.querySelectorAll("video")).toHaveLength(1);
 
   rerender(<Harness activeScreen="diagnosis" sceneKey="scene-c" src="/scenes/c.mp4" />);
-  setMediaCompletion(video, "/scenes/c.mp4");
-  fireEvent.canPlay(video);
+  const diagnosis = videos().diagnosis;
+  setSourceCompletion(diagnosis, "/scenes/c.mp4");
+  fireEvent.canPlay(diagnosis);
 
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  expect(screen.getByTestId("persistent-scene-freeze")).not.toBeVisible();
-  expect(document.querySelectorAll("video")).toHaveLength(1);
+  expect(document.querySelectorAll("video")).toHaveLength(3);
 });

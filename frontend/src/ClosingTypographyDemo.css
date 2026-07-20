@@ -1,0 +1,211 @@
+.closing-type-demo {
+  min-height: 100svh;
+  background: #d9dcc5;
+}
+
+.closing-type-demo__stage {
+  --closing-copy-font: "Alibaba PuHuiTi 3.0 65 Medium", "Alibaba PuHuiTi 3.0", "PingFang SC", sans-serif;
+  --closing-focus-font: "Songti SC", "STSong", serif;
+  --closing-copy-weight: 500;
+  --closing-focus-weight: 700;
+  --closing-copy-tracking: -.06em;
+  --closing-focus-tracking: -.1em;
+  position: relative;
+  isolation: isolate;
+  min-height: 100svh;
+  overflow: hidden;
+  color: #143b2e;
+  background: url("/closing-road-no-tree.webp") center bottom / cover no-repeat;
+}
+
+.closing-type-demo__stage--precision {
+  --closing-copy-font: "Alibaba PuHuiTi 3.0 65 Medium", "Alibaba PuHuiTi 3.0", "PingFang SC", sans-serif;
+  --closing-focus-font: "Alibaba PuHuiTi 3.0 115 Black", "Alibaba PuHuiTi 3.0 95 ExtraBold", "PingFang SC", sans-serif;
+  --closing-copy-weight: 500;
+  --closing-focus-weight: 900;
+  --closing-copy-tracking: -.075em;
+  --closing-focus-tracking: -.16em;
+}
+
+.closing-type-demo__stage--evidence {
+  --closing-copy-font: "Alibaba PuHuiTi 3.0 55 Regular", "Alibaba PuHuiTi 3.0", "PingFang SC", sans-serif;
+  --closing-focus-font: "Songti SC", "STSong", serif;
+  --closing-copy-weight: 500;
+  --closing-focus-weight: 700;
+  --closing-copy-tracking: -.055em;
+  --closing-focus-tracking: -.09em;
+}
+
+.closing-type-demo__stage--verdict {
+  --closing-copy-font: "Songti SC", "STSong", serif;
+  --closing-focus-font: "PingFang SC", "Alibaba PuHuiTi 3.0 115 Black", sans-serif;
+  --closing-copy-weight: 600;
+  --closing-focus-weight: 900;
+  --closing-copy-tracking: -.04em;
+  --closing-focus-tracking: -.18em;
+}
+
+.closing-type-demo__wash {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(18, 85, 60, .34) 0%, rgba(38, 112, 78, .19) 50%, rgba(61, 142, 96, .05) 100%),
+    linear-gradient(0deg, rgba(16, 76, 55, .16), transparent 44%);
+}
+
+.closing-type-demo__statement {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  margin: 0;
+  color: #143b2e;
+  font-family: var(--closing-copy-font);
+  font-weight: var(--closing-copy-weight);
+  font-kerning: normal;
+  letter-spacing: var(--closing-copy-tracking);
+  line-height: .92;
+  white-space: nowrap;
+}
+
+.closing-type-demo__statement strong {
+  display: inline-block;
+  color: inherit;
+  font-family: var(--closing-focus-font);
+  font-weight: var(--closing-focus-weight);
+  letter-spacing: var(--closing-focus-tracking);
+  line-height: .78;
+}
+
+.closing-type-demo__statement--primary {
+  top: 76px;
+  left: 32px;
+  font-size: clamp(86px, min(5.47vw, 10.31vh), 112px);
+}
+
+.closing-type-demo__statement--primary strong {
+  font-size: clamp(180px, min(10.45vw, 19.71vh), 214px);
+}
+
+.closing-type-demo__statement--secondary {
+  top: 246px;
+  right: clamp(14px, 1.5vw, 32px);
+  color: #d9f35b;
+  font-size: clamp(112px, min(7.03vw, 13.26vh), 144px);
+}
+
+.closing-type-demo__statement--secondary strong {
+  font-size: clamp(204px, min(11.62vw, 21.92vh), 238px);
+}
+
+.closing-type-demo__controls {
+  position: absolute;
+  z-index: 4;
+  bottom: 24px;
+  left: 28px;
+  width: min(620px, calc(100% - 56px));
+  padding: 14px;
+  border: 1px solid rgba(232, 243, 234, .26);
+  border-radius: 12px;
+  color: #edf7ef;
+  background: rgba(10, 47, 38, .63);
+  box-shadow: 0 18px 44px rgba(8, 33, 27, .2), inset 0 1px 0 rgba(255, 255, 255, .08);
+  backdrop-filter: blur(12px);
+}
+
+.closing-type-demo__controls-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 12px;
+}
+
+.closing-type-demo__controls-head p {
+  margin: 0;
+  color: rgba(239, 248, 242, .82);
+  font-family: "Alibaba PuHuiTi 3.0", "PingFang SC", sans-serif;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+
+.closing-type-demo__controls-head a {
+  color: rgba(239, 248, 242, .76);
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.closing-type-demo__controls-head a:hover,
+.closing-type-demo__controls-head a:focus-visible {
+  color: #d9f35b;
+}
+
+.closing-type-demo__choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.closing-type-demo__choices button {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 8px;
+  min-height: 66px;
+  padding: 9px 10px;
+  border: 1px solid rgba(233, 246, 236, .16);
+  border-radius: 7px;
+  color: rgba(239, 248, 242, .78);
+  background: rgba(255, 255, 255, .035);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .18s ease, background .18s ease, color .18s ease, transform .18s ease;
+}
+
+.closing-type-demo__choices button b {
+  color: rgba(217, 243, 91, .8);
+  font-family: "Alibaba PuHuiTi 3.0 115 Black", "Alibaba PuHuiTi 3.0", sans-serif;
+  font-size: 13px;
+}
+
+.closing-type-demo__choices button span {
+  align-self: center;
+  font-family: "Alibaba PuHuiTi 3.0", "PingFang SC", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.closing-type-demo__choices button small {
+  grid-column: 1 / -1;
+  color: rgba(239, 248, 242, .5);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.closing-type-demo__choices button:hover,
+.closing-type-demo__choices button:focus-visible {
+  border-color: rgba(217, 243, 91, .62);
+  color: #f5fbf3;
+  background: rgba(217, 243, 91, .12);
+  outline: none;
+  transform: translateY(-2px);
+}
+
+.closing-type-demo__choices button.is-active {
+  border-color: rgba(217, 243, 91, .82);
+  color: #f7fff4;
+  background: rgba(217, 243, 91, .17);
+}
+
+.closing-type-demo__choices button.is-active small {
+  color: rgba(239, 248, 242, .72);
+}
+
+@media (min-width: 1200px) and (min-aspect-ratio: 16 / 9) {
+  .closing-type-demo__statement--primary { font-size: clamp(100px, 7.8vw, 126px); }
+  .closing-type-demo__statement--primary strong { font-size: clamp(210px, 15.8vw, 240px); }
+  .closing-type-demo__statement--secondary { font-size: clamp(130px, 9.8vw, 160px); }
+  .closing-type-demo__statement--secondary strong { font-size: clamp(240px, 18.4vw, 270px); }
+}

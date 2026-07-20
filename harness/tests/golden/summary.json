@@ -1,62 +1,132 @@
 {
   "default": {
-    "event_count": 3,
-    "historical_event_count": 3,
+    "episode_count": 3,
+    "evidence_count": 18,
+    "generation_mode": "local-harness",
+    "limitations": [
+      "车速、制动、油门与转向来自位姿差分或演示估计，不是原始 CAN 总线信号。",
+      "车道引导线与计划路径是演示可视化，不是高精地图或量产规划器真值。",
+      "本地规则分析仅用于场景筛查与回归建议，不代替道路安全认证。"
+    ],
     "overall": 66,
+    "protected_facts_fingerprint": "3c00ba609885a1d16100aef6ea5e04f2d174924517d9d0efc6dfc546864c909a",
     "scene_name": "城市路口侧向超车"
   },
   "scene-0061": {
-    "event_count": 1,
-    "historical_event_count": 1,
+    "episode_count": 1,
+    "evidence_count": 6,
+    "generation_mode": "local-harness",
+    "limitations": [
+      "车速、制动、油门与转向来自位姿差分或演示估计，不是原始 CAN 总线信号。",
+      "车道引导线与计划路径是演示可视化，不是高精地图或量产规划器真值。",
+      "本地规则分析仅用于场景筛查与回归建议，不代替道路安全认证。"
+    ],
     "overall": 60,
+    "protected_facts_fingerprint": "df27c35afb99f2554e1a0580d8658fdc2f98ae8e9371af6425d7aadce5c79bfa",
     "scene_name": "工区左转跟车"
   },
   "scene-0103": {
-    "event_count": 1,
-    "historical_event_count": 1,
+    "episode_count": 1,
+    "evidence_count": 6,
+    "generation_mode": "local-harness",
+    "limitations": [
+      "车速、制动、油门与转向来自位姿差分或演示估计，不是原始 CAN 总线信号。",
+      "车道引导线与计划路径是演示可视化，不是高精地图或量产规划器真值。",
+      "本地规则分析仅用于场景筛查与回归建议，不代替道路安全认证。"
+    ],
     "overall": 55,
+    "protected_facts_fingerprint": "a9afc3617fe3854dd8bf09e14ca4bb57f8f116d11f43bf5124317bf8356d8520",
     "scene_name": "人车混流待转"
   },
   "scene-0553": {
-    "event_count": 1,
-    "historical_event_count": 1,
+    "episode_count": 1,
+    "evidence_count": 6,
+    "generation_mode": "local-harness",
+    "limitations": [
+      "车速、制动、油门与转向来自位姿差分或演示估计，不是原始 CAN 总线信号。",
+      "车道引导线与计划路径是演示可视化，不是高精地图或量产规划器真值。",
+      "本地规则分析仅用于场景筛查与回归建议，不代替道路安全认证。"
+    ],
     "overall": 34,
+    "protected_facts_fingerprint": "c4edd9b276ada3aa75d4ef7eeb3f7148ce808aaaf40e20ecae9dccb1d7fb5a77",
     "scene_name": "斑马线母婴穿越"
   },
   "scene-0655": {
-    "event_count": 1,
-    "historical_event_count": 1,
+    "episode_count": 1,
+    "evidence_count": 6,
+    "generation_mode": "local-harness",
+    "limitations": [
+      "车速、制动、油门与转向来自位姿差分或演示估计，不是原始 CAN 总线信号。",
+      "车道引导线与计划路径是演示可视化，不是高精地图或量产规划器真值。",
+      "本地规则分析仅用于场景筛查与回归建议，不代替道路安全认证。"
+    ],
     "overall": 52,
+    "protected_facts_fingerprint": "b31843ca454aa4270a55821321d74f1356964ff8115c7efd60ae98a79a466016",
     "scene_name": "停车场行人横穿"
   },
   "scene-0757": {
-    "event_count": 1,
-    "historical_event_count": 1,
+    "episode_count": 1,
+    "evidence_count": 6,
+    "generation_mode": "local-harness",
+    "limitations": [
+      "车速、制动、油门与转向来自位姿差分或演示估计，不是原始 CAN 总线信号。",
+      "车道引导线与计划路径是演示可视化，不是高精地图或量产规划器真值。",
+      "本地规则分析仅用于场景筛查与回归建议，不代替道路安全认证。"
+    ],
     "overall": 41,
+    "protected_facts_fingerprint": "6a5eabbcb0bbe106b9d46c17e45df604772bd6e948bbb9454f7ab6214fd25fcd",
     "scene_name": "繁忙路口公交博弈"
   },
   "scene-0916": {
-    "event_count": 1,
-    "historical_event_count": 1,
+    "episode_count": 1,
+    "evidence_count": 6,
+    "generation_mode": "local-harness",
+    "limitations": [
+      "车速、制动、油门与转向来自位姿差分或演示估计，不是原始 CAN 总线信号。",
+      "车道引导线与计划路径是演示可视化，不是高精地图或量产规划器真值。",
+      "本地规则分析仅用于场景筛查与回归建议，不代替道路安全认证。"
+    ],
     "overall": 64,
+    "protected_facts_fingerprint": "058887cdf2b73d27c1cf366ff1191cc16eac984aa487f97accb3df9af8d01eba",
     "scene_name": "停车区人车密集"
   },
   "scene-1077": {
-    "event_count": 1,
-    "historical_event_count": 1,
+    "episode_count": 1,
+    "evidence_count": 6,
+    "generation_mode": "local-harness",
+    "limitations": [
+      "车速、制动、油门与转向来自位姿差分或演示估计，不是原始 CAN 总线信号。",
+      "车道引导线与计划路径是演示可视化，不是高精地图或量产规划器真值。",
+      "本地规则分析仅用于场景筛查与回归建议，不代替道路安全认证。"
+    ],
     "overall": 55,
+    "protected_facts_fingerprint": "350420792015bbfe8068baae40ceb5061241c82401e8fcfdb351a93add95a65f",
     "scene_name": "夜间主干道施工"
   },
   "scene-1094": {
-    "event_count": 1,
-    "historical_event_count": 1,
+    "episode_count": 1,
+    "evidence_count": 6,
+    "generation_mode": "local-harness",
+    "limitations": [
+      "车速、制动、油门与转向来自位姿差分或演示估计，不是原始 CAN 总线信号。",
+      "车道引导线与计划路径是演示可视化，不是高精地图或量产规划器真值。",
+      "本地规则分析仅用于场景筛查与回归建议，不代替道路安全认证。"
+    ],
     "overall": 62,
+    "protected_facts_fingerprint": "091b0d2581d1b3b829d81dab95d12fa98fe36c8bcbb7846dd12e931a93ca2cc6",
     "scene_name": "雨夜行人横穿"
   },
   "scene-1100": {
-    "event_count": 1,
-    "historical_event_count": 1,
+    "episode_count": 1,
+    "evidence_count": 6,
+    "generation_mode": "local-harness",
+    "limitations": [
+      "车速、制动、油门与转向来自位姿差分或演示估计，不是原始 CAN 总线信号。",
+      "车道引导线与计划路径是演示可视化，不是高精地图或量产规划器真值。",
+      "本地规则分析仅用于场景筛查与回归建议，不代替道路安全认证。"
+    ],
     "overall": 28,
+    "protected_facts_fingerprint": "8ac4263acdb5084018a4870edc23cc3e1abf0099ae1d179961d1eefd3f8ac1e9",
     "scene_name": "低照路口混行"
   }
 }

@@ -17,19 +17,19 @@ const appTestHarness = vi.hoisted(() => ({
 vi.mock("./TerrainBackdrop", async () => {
   const { createElement: h } = await import("react");
   return {
-    default: ({ view, preset, risk }: { view: string; preset: string; risk: string }) => h("div", {
+    default: ({ view, preset, risk, testId = "terrain-backdrop-mock" }: { view: string; preset: string; risk: string; testId?: string }) => h("div", {
       "data-preset": preset,
       "data-risk": risk,
-      "data-testid": "terrain-backdrop-mock",
+      "data-testid": testId,
       "data-view": view,
     }),
   };
 });
 vi.mock("./useShowcaseMotion", () => ({ useShowcaseMotion: vi.fn() }));
-vi.mock("./LidarBev", async () => {
+vi.mock("./LazyLidarBev", async () => {
   const { createElement: h } = await import("react");
   return {
-    LidarBev: (props: {
+    LazyLidarBev: (props: {
       sceneId: string;
       pointCloud: Float32Array | null;
       frame: unknown;
@@ -46,13 +46,14 @@ vi.mock("./LidarBev", async () => {
         "data-testid": "lidar-bev-mock",
       });
     },
+    preloadLidarBev: vi.fn(),
   };
 });
 
 import App, {
-  advanceDiagnosisProgress,
   clearMapCanvasBitmap,
   DEFAULT_MAP_VIEWPORT,
+  interpolatePerceptionFrame,
   loadOptionalLidarIndex,
   ProjectSite,
   resolveLidarDisplayState,
@@ -61,9 +62,8 @@ import App, {
   resolveLidarSource,
   resolveReplayTime,
   shouldAcceptDiagnosisResponse,
-  shouldAcceptDiagnosisJobUpdate,
 } from "./App";
-import type { DiagnosisReport } from "./cockpit/types";
+import { reportFixture } from "./features/diagnosis/test-fixtures";
 import { selectMapGeometry } from "./map-geometry";
 
 const resizeObserverInstances: ResizeObserverMock[] = [];
@@ -173,11 +173,11 @@ it("lazy-mounts the cockpit and showcase layers across transition phases", () =>
 
   fireEvent.click(screen.getByRole("button", { name: /进入效果展示/ }));
   expect(document.querySelector(".showcase")).toBeInTheDocument();
-  expect(document.querySelector(".cockpit-experience")).toBeInTheDocument();
+  expect(document.querySelector(".cockpit-experience")).toHaveAttribute("data-motion-ready", "false");
 
   fireEvent.transitionEnd(screen.getByTestId("view-layer-cockpit"), { propertyName: "transform" });
   expect(document.querySelector(".showcase")).not.toBeInTheDocument();
-  expect(document.querySelector(".cockpit-experience")).toBeInTheDocument();
+  expect(document.querySelector(".cockpit-experience")).toHaveAttribute("data-motion-ready", "true");
 });
 
 it("restores the saved showcase scroll position while exiting the cockpit", () => {
@@ -193,7 +193,7 @@ it("restores the saved showcase scroll position while exiting the cockpit", () =
   expect(restoredShowcase.scrollTop).toBe(640);
 });
 
-it("keeps one terrain backdrop mounted while switching views", () => {
+it("keeps the global terrain backdrop mounted while switching views", () => {
   render(createElement(App));
   const terrain = screen.getByTestId("terrain-backdrop-mock");
   expect(terrain).toHaveAttribute("data-view", "showcase");
@@ -221,6 +221,11 @@ it("renders the demo as a visual-only cockpit entry", () => {
 
   const cockpitButtons = screen.getAllByRole("button", { name: "进入驾驶舱" });
   expect(cockpitButtons).toHaveLength(1);
+  const labelMotion = cockpitButtons[0].querySelector(".demo-swipe-label > .demo-swipe-label-motion");
+  expect(labelMotion).toHaveTextContent("右滑进入驾驶舱");
+  const demoVideo = document.querySelector<HTMLVideoElement>("[data-motion-media]");
+  expect(demoVideo).not.toHaveAttribute("src");
+  expect(demoVideo).toHaveAttribute("preload", "none");
   fireEvent.click(cockpitButtons[0]);
   expect(onOpenDemo).toHaveBeenCalledTimes(1);
   expect(screen.queryByText("DRIVEGUARD / LIVE DEMO")).not.toBeInTheDocument();
@@ -319,6 +324,63 @@ describe("cockpit replay integration", () => {
     expect(DEFAULT_MAP_VIEWPORT).toEqual({ zoom: 1, offsetX: 0, offsetY: 0 });
   });
 
+  it("interpolates perception boxes, camera boxes, ego pose, and planned path", () => {
+    const frames = [
+      {
+        time: 0,
+        timestampUs: 0,
+        ego: { x: 0, y: 0, yaw: 0, latitude: 31, longitude: 121 },
+        objects: [{
+          id: "car",
+          label: "car",
+          category: "vehicle",
+          x: 10,
+          y: 2,
+          z: 0,
+          width: 2,
+          length: 4,
+          height: 1.5,
+          yaw: 0,
+          risk: "low" as const,
+          cameraBox: { x: 10, y: 20, width: 30, height: 40, imageWidth: 100, imageHeight: 100, depth: 10 },
+        }],
+        lanes: [{ id: "ego", points: [{ x: 0, y: 0, z: 0 }] }],
+        plannedPath: [{ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }],
+      },
+      {
+        time: 1,
+        timestampUs: 1_000_000,
+        ego: { x: 4, y: 2, yaw: Math.PI / 2, latitude: 31.2, longitude: 121.4 },
+        objects: [{
+          id: "car",
+          label: "car",
+          category: "vehicle",
+          x: 6,
+          y: 4,
+          z: 1,
+          width: 4,
+          length: 6,
+          height: 2.5,
+          yaw: Math.PI / 2,
+          risk: "high" as const,
+          cameraBox: { x: 30, y: 40, width: 50, height: 60, imageWidth: 100, imageHeight: 100, depth: 6 },
+        }],
+        lanes: [{ id: "ego", points: [{ x: 1, y: 0, z: 0 }] }],
+        plannedPath: [{ x: 0, y: 0, z: 0 }, { x: 20, y: 2, z: 0 }],
+      },
+    ];
+
+    const frame = interpolatePerceptionFrame(frames, 0.5);
+    expect(frame?.ego.x).toBe(2);
+    expect(frame?.ego.y).toBe(1);
+    expect(frame?.ego.yaw).toBeCloseTo(Math.PI / 4);
+    expect(frame?.objects[0].x).toBe(8);
+    expect(frame?.objects[0].width).toBe(3);
+    expect(frame?.objects[0].cameraBox?.x).toBe(20);
+    expect(frame?.plannedPath[1].x).toBe(15);
+    expect(frame?.time).toBe(0.5);
+  });
+
   it("keeps route source selection stable for stationary ego data", () => {
     const geometry = selectMapGeometry(
       [{ forward: 0, left: 0 }, { forward: 0, left: 0 }],
@@ -359,6 +421,21 @@ describe("cockpit replay integration", () => {
     });
   });
 
+  it("selects the recorded LiDAR scan at or before video time", () => {
+    const index = {
+      version: 1,
+      pointFormat: "xyzI-f32-le" as const,
+      frames: [
+        { time: 0, timestampUs: 0, file: "0.bin", pointCount: 1 },
+        { time: 0.1, timestampUs: 100_000, file: "1.bin", pointCount: 1 },
+      ],
+    };
+    const ownedIndex = { sceneId: "scene-a", index };
+
+    expect(resolveLidarRequestCandidate("scene-a", ownedIndex, 0.099)?.frame.file).toBe("0.bin");
+    expect(resolveLidarRequestCandidate("scene-a", ownedIndex, 0.1)?.frame.file).toBe("1.bin");
+  });
+
   it("contains a rejected optional LiDAR index load", async () => {
     const result = await loadOptionalLidarIndex(
       "/scenes/default/lidar/index.json",
@@ -387,20 +464,6 @@ describe("cockpit replay integration", () => {
     expect(shouldAcceptDiagnosisResponse(null, 4, 7, 2)).toBe(false);
   });
 
-  it("accepts report progress only for the active scene generation, scene key, and job", () => {
-    const owner = { sceneGeneration: 4, sceneKey: "scene-a", jobId: "job-1" };
-
-    expect(shouldAcceptDiagnosisJobUpdate(owner, 4, "scene-a", "job-1")).toBe(true);
-    expect(shouldAcceptDiagnosisJobUpdate(owner, 5, "scene-a", "job-1")).toBe(false);
-    expect(shouldAcceptDiagnosisJobUpdate(owner, 4, "scene-b", "job-1")).toBe(false);
-    expect(shouldAcceptDiagnosisJobUpdate(owner, 4, "scene-a", "job-2")).toBe(false);
-    expect(shouldAcceptDiagnosisJobUpdate(null, 4, "scene-a", "job-1")).toBe(false);
-  });
-
-  it("keeps report progress monotonic across create and poll snapshots", () => {
-    expect(advanceDiagnosisProgress(50, 18)).toBe(50);
-    expect(advanceDiagnosisProgress(50, 86)).toBe(86);
-  });
 });
 
 it("attaches the map resize observer when the cockpit canvas mounts", () => {
@@ -420,7 +483,7 @@ it("attaches the map resize observer when the cockpit canvas mounts", () => {
   expect(mapObserver?.disconnect).toHaveBeenCalledOnce();
 });
 
-it("clears old scene coordinates until the selected scene perception resolves", async () => {
+  it("clears old scene data until the selected scene perception resolves", async () => {
   const telemetry = [{
     time: 0,
     speedKmh: 18,
@@ -495,7 +558,7 @@ it("clears old scene coordinates until the selected scene perception resolves", 
   await waitFor(() => {
     expect(sceneSelector).toHaveValue("scene-a");
     expect(sceneSelector).toBeEnabled();
-    expect(mapPanel.querySelector(".panel-title strong")).toHaveTextContent("31.12345, 121.54321");
+    expect(mapPanel.querySelector(".panel-title strong")).not.toBeInTheDocument();
   });
 
   fireEvent.click(screen.getByRole("button", { name: "放大地图" }));
@@ -515,7 +578,7 @@ it("clears old scene coordinates until the selected scene perception resolves", 
   fireEvent.change(sceneSelector, { target: { value: "scene-b" } });
 
   expect(sceneSelector).toHaveValue("scene-b");
-  expect(mapPanel.querySelector(".panel-title strong")).toHaveTextContent("--");
+  expect(mapPanel.querySelector(".panel-title strong")).not.toBeInTheDocument();
   expect(setTransform).toHaveBeenCalledWith(1, 0, 0, 1, 0, 0);
   expect(clearRect).toHaveBeenCalledWith(0, 0, 937, 541);
   expect(restore).toHaveBeenCalledOnce();
@@ -525,32 +588,11 @@ it("clears old scene coordinates until the selected scene perception resolves", 
     await sceneBPerception;
   });
   await waitFor(() => {
-    expect(mapPanel.querySelector(".panel-title strong")).toHaveTextContent("32.22222, 120.33333");
+    expect(mapPanel.querySelector(".panel-title strong")).not.toBeInTheDocument();
   });
 });
 
 describe("scene-owned cockpit async state", () => {
-  const completedReport = {
-    schema_version: "1.0",
-    scene_name: "旧场景报告",
-    data_version: "manifest-v1",
-    generation_mode: "local-harness",
-    executive_summary: "STALE REPORT CONTENT",
-    scene_overview: {},
-    data_quality: [],
-    scores: { perception: 10, motion: 20, control: 30, trajectory: 40, data_quality: 90, overall: 30, confidence: 0.9 },
-    key_findings: [],
-    timeline: [],
-    historical_risk_events: [],
-    perception_analysis: { summary: "感知稳定。", metrics: {}, evidence_ids: [] },
-    motion_control_analysis: { summary: "控制稳定。", metrics: {}, evidence_ids: [] },
-    trajectory_analysis: { summary: "轨迹稳定。", metrics: {}, evidence_ids: [] },
-    causal_chains: [],
-    recommendations: [],
-    regression_tests: [],
-    evidence_index: [],
-    limitations: [],
-  } satisfies DiagnosisReport;
   const telemetry = [{
     time: 0,
     speedKmh: 18,
@@ -619,7 +661,7 @@ describe("scene-owned cockpit async state", () => {
     return Promise.resolve(new Response(null, { status: 404 }));
   });
 
-  it("clears LiDAR metadata and render props in the first commit for a new scene", async () => {
+  it("clears LiDAR render props in the first commit for a new scene", async () => {
     vi.stubGlobal("fetch", createSceneFetch({ withLidar: true }));
 
     render(createElement(App));
@@ -641,8 +683,7 @@ describe("scene-owned cockpit async state", () => {
     expect(firstSceneBSnapshot?.frame).toBeNull();
     expect(firstSceneBSnapshot?.history).toEqual([]);
     expect(firstSceneBSnapshot?.status).toBe("loading");
-    expect(screen.getByLabelText("LiDAR 数据状态")).toHaveTextContent("点 --");
-    expect(screen.getByLabelText("LiDAR 数据状态")).toHaveTextContent("关键帧 --");
+    expect(screen.queryByLabelText("LiDAR 数据状态")).not.toBeInTheDocument();
   });
 
   it("keeps active-scene evidence intact when the same scene is selected again", async () => {
@@ -657,7 +698,7 @@ describe("scene-owned cockpit async state", () => {
       expect(sceneSelector).toBeEnabled();
       expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-cloud", "present");
       expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-status", "ready");
-      expect(document.querySelector(".cockpit-map-slot .panel-title strong")).toHaveTextContent("31.10000, 121.50000");
+      expect(document.querySelector(".cockpit-map-slot .panel-title strong")).not.toBeInTheDocument();
     });
 
     appTestHarness.lidarSnapshots.length = 0;
@@ -666,8 +707,8 @@ describe("scene-owned cockpit async state", () => {
     expect(appTestHarness.lidarSnapshots.some((snapshot) => snapshot.pointCloud === null)).toBe(false);
     expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-cloud", "present");
     expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-status", "ready");
-    expect(screen.getByLabelText("LiDAR 数据状态")).toHaveTextContent("已同步");
-    expect(document.querySelector(".cockpit-map-slot .panel-title strong")).toHaveTextContent("31.10000, 121.50000");
+    expect(screen.queryByLabelText("LiDAR 数据状态")).not.toBeInTheDocument();
+    expect(document.querySelector(".cockpit-map-slot .panel-title strong")).not.toBeInTheDocument();
   });
 
   it("keeps healthy LiDAR available when the telemetry bundle fails", async () => {
@@ -694,108 +735,59 @@ describe("scene-owned cockpit async state", () => {
     await waitFor(() => expect(screen.getByText(/telemetry offline/)).toBeInTheDocument());
     expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-cloud", "present");
     expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-status", "ready");
-    expect(screen.getByLabelText("LiDAR 数据状态")).toHaveTextContent("已同步");
+    expect(screen.queryByLabelText("LiDAR 数据状态")).not.toBeInTheDocument();
   });
 
-  it("detaches an in-flight diagnosis socket and rejects its old-scene response", async () => {
+  it("removes diagnosis-only scene and action controls", async () => {
     vi.stubGlobal("fetch", createSceneFetch({ withLidar: false }));
 
     render(createElement(App));
     enterCockpit();
     activateCockpitScreen("全域诊断");
-    const sceneSelector = await screen.findByRole("combobox", { name: "选择数据场景" });
-    await waitFor(() => {
-      expect(sceneSelector).toHaveValue("scene-a");
-      expect(sceneSelector).toBeEnabled();
-    });
-    const socket = WebSocketMock.instances[0];
-    act(() => socket.onopen?.(new Event("open")));
-    const diagnoseButton = screen.getByRole("button", { name: "全域诊断" });
-    await waitFor(() => expect(diagnoseButton).toBeEnabled());
-    fireEvent.click(diagnoseButton);
-    expect(socket.send).toHaveBeenCalledOnce();
-    const staleHandler = socket.onmessage;
 
-    fireEvent.change(sceneSelector, { target: { value: "scene-b" } });
+    await waitFor(() => expect(screen.getByText("驾驶诊断")).toBeInTheDocument());
+    expect(screen.queryByRole("combobox", { name: "选择数据场景" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "全域诊断" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "生成全场景报告" })).not.toBeInTheDocument();
 
-    expect(socket.onmessage).toBeNull();
-    expect(socket.close).toHaveBeenCalledOnce();
-    act(() => staleHandler?.(new MessageEvent("message", {
-      data: JSON.stringify({
-        riskLevel: "high",
-        thought: "STALE THOUGHT",
-        conclusion: "STALE CONCLUSION",
-      }),
-    })));
-    expect(screen.queryByText("STALE THOUGHT")).not.toBeInTheDocument();
-    expect(screen.queryByText("STALE CONCLUSION")).not.toBeInTheDocument();
-    expect(screen.getByText("等待当前帧诊断结果。")).toBeInTheDocument();
+    const title = screen.getByText("驾驶诊断").closest(".diagnosis-action__header");
+    expect(title).toBeInTheDocument();
   });
 
-  it("rejects a delayed old-scene report after the new scene job becomes owner", async () => {
-    let resolveOldReport!: (response: Response) => void;
-    const pendingOldReport = new Promise<Response>((resolve) => {
-      resolveOldReport = resolve;
-    });
-    let resolveCurrentReport!: (response: Response) => void;
-    const pendingCurrentReport = new Promise<Response>((resolve) => {
-      resolveCurrentReport = resolve;
-    });
-    let oldPollSignal: AbortSignal | undefined;
-    const baseFetch = createSceneFetch({ withLidar: false });
-    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith("/api/v1/diagnoses") && init?.method === "POST") {
-        const requestedScene = JSON.parse(String(init.body)).sceneKey as string;
-        const current = requestedScene === "scene-b";
-        return Promise.resolve(jsonResponse({
-          jobId: current ? "job-current" : "job-old",
-          sceneKey: requestedScene,
-          dataVersion: "manifest-v1",
-          stage: "validation",
-          percent: 10,
-          report: null,
-          error: null,
-        }));
-      }
-      if (url.endsWith("/api/v1/diagnoses/job-old")) {
-        oldPollSignal = init?.signal ?? undefined;
-        return pendingOldReport;
-      }
-      if (url.endsWith("/api/v1/diagnoses/job-current")) return pendingCurrentReport;
-      return baseFetch(input);
-    });
-    vi.stubGlobal("fetch", fetchMock);
+  it("keeps legacy socket errors in live monitoring instead of V2 diagnosis progress", async () => {
+    vi.stubGlobal("fetch", createSceneFetch({ withLidar: false }));
 
     render(createElement(App));
     enterCockpit();
     activateCockpitScreen("全域诊断");
-    const sceneSelector = await screen.findByRole("combobox", { name: "选择数据场景" });
-    await waitFor(() => expect(sceneSelector).toHaveValue("scene-a"));
+    await waitFor(() => expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-scene-id", "scene-a"));
+    await screen.findByRole("button", { name: "启动全域诊断" });
 
-    const reportButton = screen.getByRole("button", { name: "生成全场景报告" });
-    await waitFor(() => expect(reportButton).toBeEnabled());
-    fireEvent.click(reportButton);
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringMatching(/\/api\/v1\/diagnoses\/job-old$/),
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    const socket = WebSocketMock.instances.find((instance) => instance.onerror !== null);
+    expect(socket?.onerror).toEqual(expect.any(Function));
+    act(() => socket!.onerror!(new Event("error")));
+
+    await waitFor(() => expect(document.querySelector(".cockpit-monitor__error")).toHaveTextContent(
+      "WebSocket 连接异常，请确认后端服务是否启动。",
     ));
+    const legacyError = document.querySelector(".cockpit-monitor__error")!;
+    expect(document.querySelector(".cockpit-diagnosis__action")).not.toHaveTextContent(legacyError.textContent ?? "");
+  });
 
-    fireEvent.change(sceneSelector, { target: { value: "scene-b" } });
-    expect(oldPollSignal?.aborted).toBe(true);
-    await waitFor(() => {
-      expect(sceneSelector).toHaveValue("scene-b");
-      expect(screen.getByRole("button", { name: "生成全场景报告" })).toBeEnabled();
-    });
-    fireEvent.click(screen.getByRole("button", { name: "生成全场景报告" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringMatching(/\/api\/v1\/diagnoses\/job-current$/),
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    ));
-
-    await act(async () => {
-      resolveOldReport(jsonResponse({
-        jobId: "job-old",
+  it("keeps V2 progress in screen 03 and mounts screen 04 only after validated completion", async () => {
+    let pollCount = 0;
+    let completeDiagnosis!: () => void;
+    const completedReport = {
+      ...reportFixture,
+      meta: {
+        ...reportFixture.meta,
+        scene_name: "场景 A",
+        data_version: "manifest-v1",
+      },
+    };
+    const completionResponse = new Promise<Response>((resolve) => {
+      completeDiagnosis = () => resolve(jsonResponse({
+        jobId: "job-v2",
         sceneKey: "scene-a",
         dataVersion: "manifest-v1",
         stage: "complete",
@@ -803,44 +795,164 @@ describe("scene-owned cockpit async state", () => {
         report: completedReport,
         error: null,
       }));
-      await pendingOldReport;
-      await new Promise((resolve) => setTimeout(resolve, 0));
     });
+    const baseFetch = createSceneFetch({ withLidar: false });
+    const fetchMock = vi.fn();
+    fetchMock.mockImplementation((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/diagnoses") && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({
+          jobId: "job-v2",
+          sceneKey: "scene-a",
+          dataVersion: "manifest-v1",
+          stage: "queued",
+          percent: 0,
+          report: null,
+          error: null,
+        }));
+      }
+      if (url.endsWith("/api/v1/diagnoses/job-v2")) {
+        pollCount += 1;
+        if (pollCount > 1) return completionResponse;
+        return Promise.resolve(jsonResponse({
+          jobId: "job-v2",
+          sceneKey: "scene-a",
+          dataVersion: "manifest-v1",
+          stage: "evidence",
+          percent: 62,
+          report: null,
+          error: null,
+        }));
+      }
+      return baseFetch(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
-    expect(screen.queryByText("STALE REPORT CONTENT")).not.toBeInTheDocument();
+    render(createElement(App));
+    enterCockpit();
+    activateCockpitScreen("全域诊断");
+    await waitFor(() => expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-scene-id", "scene-a"));
+    await screen.findByRole("button", { name: "启动全域诊断" });
+    fireEvent.click(screen.getByRole("button", { name: "启动全域诊断" }));
 
-    await act(async () => {
-      resolveCurrentReport(jsonResponse({
-        jobId: "job-current",
-        sceneKey: "scene-b",
-        dataVersion: "manifest-v1",
-        stage: "complete",
-        percent: 100,
-        report: {
-          ...completedReport,
-          scene_name: "新场景报告",
-          executive_summary: "CURRENT REPORT CONTENT",
-        },
-        error: null,
+    expect(await screen.findByText("正在建立诊断证据链")).toBeVisible();
+    expect(screen.queryByRole("region", { name: "诊断报告" })).not.toBeInTheDocument();
+    completeDiagnosis();
+    expect(await screen.findByRole("region", { name: "诊断报告" }, { timeout: 2_000 })).toBeVisible();
+    expect(document.querySelector(".cockpit-experience")).toHaveAttribute("data-active-screen", "report");
+  });
+
+  it("returns to screen 03 and forces a fresh job when rerunning a completed report", async () => {
+    let diagnosisCreateCount = 0;
+    const completedReport = {
+      ...reportFixture,
+      meta: {
+        ...reportFixture.meta,
+        scene_name: "场景 A",
+        data_version: "manifest-v1",
+      },
+    };
+    const baseFetch = createSceneFetch({ withLidar: false });
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/diagnoses") && init?.method === "POST") {
+        diagnosisCreateCount += 1;
+        if (diagnosisCreateCount === 1) return Promise.resolve(jsonResponse({
+          jobId: "job-complete",
+          sceneKey: "scene-a",
+          dataVersion: "manifest-v1",
+          stage: "complete",
+          percent: 100,
+          report: completedReport,
+          error: null,
+        }));
+        return Promise.resolve(jsonResponse({
+          jobId: "job-rerun",
+          sceneKey: "scene-a",
+          dataVersion: "manifest-v1",
+          stage: "evidence",
+          percent: 62,
+          report: null,
+          error: null,
+        }));
+      }
+      if (url.endsWith("/api/v1/diagnoses/job-rerun")) return new Promise<Response>(() => undefined);
+      return baseFetch(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(createElement(App));
+    enterCockpit();
+    activateCockpitScreen("全域诊断");
+    await waitFor(() => expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-scene-id", "scene-a"));
+    await screen.findByRole("button", { name: "启动全域诊断" });
+    fireEvent.click(screen.getByRole("button", { name: "启动全域诊断" }));
+    await screen.findByRole("region", { name: "诊断报告" });
+
+    fireEvent.click(screen.getByRole("button", { name: "重新诊断" }));
+
+    await waitFor(() => expect(diagnosisCreateCount).toBe(2));
+    expect(document.querySelector(".cockpit-experience")).toHaveAttribute("data-active-screen", "diagnosis");
+    expect(screen.queryByRole("region", { name: "诊断报告" })).not.toBeInTheDocument();
+    expect(screen.getByText("正在建立诊断证据链")).toBeVisible();
+    const diagnosisPosts = fetchMock.mock.calls.filter(([input, init]) => (
+      String(input).endsWith("/api/v1/diagnoses") && (init as RequestInit | undefined)?.method === "POST"
+    ));
+    expect(JSON.parse(String((diagnosisPosts[1][1] as RequestInit).body))).toEqual({
+      sceneKey: "scene-a",
+      dataVersion: "manifest-v1",
+      force: true,
+    });
+  });
+
+  it("cancels an active V2 diagnosis from screen 03", async () => {
+    const baseFetch = createSceneFetch({ withLidar: false });
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/diagnoses") && init?.method === "POST") return Promise.resolve(jsonResponse({
+        jobId: "job-cancel", sceneKey: "scene-a", dataVersion: "manifest-v1", stage: "queued", percent: 0, report: null, error: null,
       }));
-      await pendingCurrentReport;
+      if (url.endsWith("/api/v1/diagnoses/job-cancel") && init?.method === "DELETE") return Promise.resolve(jsonResponse({
+        jobId: "job-cancel", sceneKey: "scene-a", dataVersion: "manifest-v1", stage: "cancelled", percent: 62, report: null, error: null,
+      }));
+      if (url.endsWith("/api/v1/diagnoses/job-cancel")) return Promise.resolve(jsonResponse({
+        jobId: "job-cancel", sceneKey: "scene-a", dataVersion: "manifest-v1", stage: "evidence", percent: 62, report: null, error: null,
+      }));
+      return baseFetch(input);
     });
-    expect(await screen.findByText("CURRENT REPORT CONTENT")).toBeInTheDocument();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(createElement(App));
+    enterCockpit();
+    activateCockpitScreen("全域诊断");
+    await waitFor(() => expect(screen.getByTestId("lidar-bev-mock")).toHaveAttribute("data-scene-id", "scene-a"));
+    await screen.findByRole("button", { name: "启动全域诊断" });
+    fireEvent.click(screen.getByRole("button", { name: "启动全域诊断" }));
+    await screen.findByRole("button", { name: "取消诊断" });
+    fireEvent.click(screen.getByRole("button", { name: "取消诊断" }));
+
+    await waitFor(() => expect(screen.getByText("诊断已取消，可重新启动")).toBeVisible());
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/\/api\/v1\/diagnoses\/job-cancel$/), { method: "DELETE" });
   });
 });
 
 describe("ProjectSite", () => {
-  it("uses the five section themes in the glass navigation", () => {
+  it("removes the product section and its entry points", () => {
     render(createElement(ProjectSite, { active: true, onOpenDemo: vi.fn(), onTerrainPresetChange: vi.fn(), playOpening: false, onOpeningComplete: vi.fn() }));
 
-    const nav = document.querySelector(".showcase-nav") as HTMLElement;
-    expect(within(nav).getByRole("link", { name: "项目定位" })).toHaveAttribute("href", "#origin");
-    expect(within(nav).getByRole("link", { name: "安全命题" })).toHaveAttribute("href", "#context");
-    expect(within(nav).getByRole("link", { name: "技术路线" })).toHaveAttribute("href", "#route");
-    expect(within(nav).getByRole("link", { name: "效果展示" })).toHaveAttribute("href", "#demo");
-    expect(within(nav).getByRole("link", { name: "产品体系" })).toHaveAttribute("href", "#product");
-    expect(nav.querySelector(".brand small")).not.toBeInTheDocument();
-    expect(within(nav).getByText("联系我们")).toBeInTheDocument();
+    const navElement = document.querySelector(".showcase-nav") as HTMLElement;
+    const nav = within(navElement);
+    expect(nav.getAllByRole("link")).toHaveLength(6);
+    expect(nav.getByRole("link", { name: "项目定位" })).toHaveAttribute("href", "#origin");
+    expect(nav.getByRole("link", { name: "安全命题" })).toHaveAttribute("href", "#context");
+    expect(nav.getByRole("link", { name: "技术路线" })).toHaveAttribute("href", "#route");
+    expect(nav.getByRole("link", { name: "效果展示" })).toHaveAttribute("href", "#demo");
+    expect(nav.queryByRole("link", { name: "产品体系" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "了解系统架构" })).not.toBeInTheDocument();
+    expect(document.querySelector("#product")).not.toBeInTheDocument();
+    expect(document.querySelector("#demo")?.nextElementSibling).toHaveAttribute("id", "contact");
+    expect(navElement.querySelector(".brand small")).not.toBeInTheDocument();
+    expect(nav.getByText("联系我们")).toBeInTheDocument();
   });
 
   it("uses the approved evidence-card layout on the formal safety section", () => {
@@ -857,8 +969,16 @@ describe("ProjectSite", () => {
   it("maps hero through closing sections to the approved presets", () => {
     render(createElement(ProjectSite, { active: true, onOpenDemo: vi.fn(), onTerrainPresetChange: vi.fn(), playOpening: false, onOpeningComplete: vi.fn() }));
     expect([...document.querySelectorAll("[data-terrain-preset]")].map((node) => node.getAttribute("data-terrain-preset"))).toEqual([
-      "hidden", "positioning", "pain", "route", "demo", "product", "closing",
+      "hidden", "positioning", "pain", "route", "demo", "closing",
     ]);
+  });
+
+  it("uses the Chinese label for the demo section index", () => {
+    render(createElement(ProjectSite, { active: true, onOpenDemo: vi.fn(), onTerrainPresetChange: vi.fn(), playOpening: false, onOpeningComplete: vi.fn() }));
+
+    const demo = within(document.querySelector("#demo") as HTMLElement);
+    expect(demo.getByText("04 / 效果展示")).toHaveClass("section-index");
+    expect(demo.queryByText("04 / LIVE PROTOTYPE")).not.toBeInTheDocument();
   });
 
   it("renders the positioning orbit independently from the route archive", () => {
@@ -896,13 +1016,36 @@ describe("ProjectSite", () => {
     expect(section.getByText("把诊断 Agent 发现的失效逻辑反向生成正确/错误推理对和高价值复盘样本，沉淀为可交付训练数据，支持后续模型与策略迭代。")).toBeInTheDocument();
   });
 
-  it("centers the footer statement and adds a concise value sentence", () => {
+  it("places a concise Chinese closing statement over the background", () => {
     render(createElement(ProjectSite, { active: true, onOpenDemo: vi.fn(), onTerrainPresetChange: vi.fn(), playOpening: false, onOpeningComplete: vi.fn() }));
 
     const footer = screen.getByRole("contentinfo");
     expect(footer).toHaveClass("showcase-footer-centered");
-    expect(screen.getByText("把异常片段、感知证据、决策逻辑和优化样本沉淀到同一条可追溯链路里。")).toBeInTheDocument();
-    expect(within(footer).getByText("2026 RESEARCH PROTOTYPE")).toBeInTheDocument();
-    expect(footer.querySelectorAll(".footer-bottom > [data-motion-stagger-item]")).toHaveLength(3);
+    expect(within(footer).getByTestId("closing-contour-overlay")).toBeInTheDocument();
+    expect(footer.querySelector(".footer-brand-backdrop")).toHaveTextContent("安全不是一句承诺它应当被证明");
+    expect(footer.querySelector(".footer-statement-focus--primary")).toHaveTextContent("不是");
+    expect(footer.querySelector(".footer-statement-focus--secondary")).toHaveTextContent("证明");
+    expect(footer.querySelectorAll(".footer-statement[data-split-text]")).toHaveLength(0);
+    expect(footer.querySelectorAll(".footer-statement[data-motion-line]")).toHaveLength(2);
+    expect(document.querySelectorAll(".showcase [data-split-text]")).toHaveLength(2);
+    expect(screen.getByRole("heading", { name: "让每一次自动驾驶决策有据可循" })).toHaveAttribute("data-split-text");
+    const upper = footer.querySelector('[data-closing-statement="upper"]');
+    const lower = footer.querySelector('[data-closing-statement="lower"]');
+    const lockup = footer.querySelector("[data-closing-brand]");
+    const brandMark = lockup?.querySelector("[data-closing-brand-mark]");
+    const brandArt = within(footer).getByRole("img", { name: "智驾卫士" });
+    expect(upper).toHaveTextContent("安全不是一句承诺");
+    expect(lower).toHaveTextContent("它应当被证明");
+    expect(lockup).toHaveClass("footer-brand-lockup");
+    expect(brandMark).toHaveAttribute("src", "/driveguard-mark.png");
+    expect(brandMark).toHaveAttribute("alt", "");
+    expect(brandMark).toHaveAttribute("aria-hidden", "true");
+    expect(brandArt).toHaveAttribute("data-closing-brand-art");
+    expect(brandArt).toHaveAttribute("src", "/closing-brand-art.png");
+    expect(footer.querySelector(".footer-tree-foreground")).not.toBeInTheDocument();
+    expect(screen.queryByText("让自动驾驶决策可追溯")).not.toBeInTheDocument();
+    expect(screen.queryByText("把异常片段、感知证据、决策逻辑和优化样本沉淀到同一条可追溯链路里")).not.toBeInTheDocument();
+    expect(within(footer).queryByText("2026 RESEARCH PROTOTYPE")).not.toBeInTheDocument();
+    expect(footer.querySelector(".footer-bottom")).not.toBeInTheDocument();
   });
 });

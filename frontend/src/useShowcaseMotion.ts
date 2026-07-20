@@ -19,6 +19,7 @@ type ShowcaseMotionOptions = {
   playOpening: boolean;
   onOpeningComplete: () => void;
   enabled?: boolean;
+  initialScrollTop?: number | null;
 };
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
@@ -30,14 +31,15 @@ const WHEEL_GESTURE_EXCLUSION = [
 
 function clearMotionStyles(root: HTMLElement) {
   const targets = root.querySelectorAll<HTMLElement>([
-    "[data-motion-line]", "[data-motion-index]", "[data-motion-copy]",
+    "[data-motion-line]", "[data-motion-index]", "[data-motion-copy]", "[data-statement-segment]",
+    "[data-closing-brand]", "[data-closing-brand-mark]", "[data-closing-brand-art]",
     "[data-motion-stagger]", "[data-motion-stagger]>[data-motion-stagger-item]",
     "[data-motion-stagger]>.archive-card",
     "[data-motion-stagger]>.border-glow-card", ".motion-block",
     "[data-motion-media-frame]", "[data-motion-media]", "[data-motion-hero-media]",
     ".showcase-nav-glass", ".hero-foot", ".hero-actions", ".hero-copy", ".showcase-hero .kicker",
   ].join(","));
-  gsap.set(targets, { clearProps: "transform,opacity,visibility,clipPath,willChange" });
+  gsap.set(targets, { clearProps: "transform,opacity,visibility,clipPath,willChange,filter" });
 }
 
 function subscribeToMediaQuery(query: MediaQueryList | null, listener: () => void) {
@@ -50,8 +52,15 @@ function subscribeToMediaQuery(query: MediaQueryList | null, listener: () => voi
   return () => query.removeListener(listener);
 }
 
-export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete, enabled = true }: ShowcaseMotionOptions) {
+export function useShowcaseMotion({
+  rootRef,
+  playOpening,
+  onOpeningComplete,
+  enabled = true,
+  initialScrollTop = null,
+}: ShowcaseMotionOptions) {
   const playOnMountRef = useRef(playOpening);
+  const initialScrollTopRef = useRef(initialScrollTop);
   const completeRef = useRef(onOpeningComplete);
   const openingResolvedRef = useRef(false);
   if (!playOpening) playOnMountRef.current = false;
@@ -231,6 +240,12 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete, ena
           overscroll: true,
           virtualScroll: handleVirtualScroll,
         });
+        const restoredScrollTop = initialScrollTopRef.current;
+        if (restoredScrollTop !== null && Number.isFinite(restoredScrollTop)) {
+          root.scrollTop = restoredScrollTop;
+          lenis.scrollTo(restoredScrollTop, { immediate: true, force: true });
+          initialScrollTopRef.current = null;
+        }
         snap = new Snap(lenis, {
           type: "lock",
           duration: 1.05,
@@ -263,7 +278,6 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete, ena
           const hero = root.querySelector<HTMLElement>("[data-motion-hero]");
           const heroMedia = root.querySelector<HTMLElement>("[data-motion-hero-media]");
           const openingPanels = Array.from(root.querySelectorAll<HTMLElement>("[data-motion-opening-panel]"));
-          const heroLines = Array.from(hero?.querySelectorAll<HTMLElement>("[data-motion-line]") ?? []);
           const navSurface = root.querySelector<HTMLElement>(".showcase-nav-glass");
 
           if (shouldPlayOpening && opening && hero && heroMedia) {
@@ -272,13 +286,12 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete, ena
             openingTimeline
               .fromTo(heroMedia, { scale: 1.08 }, { scale: 1, duration: 3, willChange: "transform" }, 0)
               .fromTo(openingPanels, { yPercent: 0 }, { yPercent: (index) => index % 2 ? 102 : -102, duration: 1.68, stagger: .08 }, .34)
-              .fromTo(heroLines, { yPercent: 115, scaleY: .78 }, { yPercent: 0, scaleY: 1, duration: 1.4, stagger: .10 }, .88)
-              .fromTo(".showcase-hero .kicker", { autoAlpha: 0, y: 30 }, { autoAlpha: 1, y: 0, duration: .9 }, 1.16)
-              .fromTo(".hero-copy", { autoAlpha: 0, y: 34 }, { autoAlpha: 1, y: 0, duration: .98 }, 1.38)
+              .fromTo(".showcase-hero .kicker", { autoAlpha: 0, y: 24 }, { autoAlpha: 1, y: 0, duration: .65, ease: "power2.out" }, 1.16)
+              .fromTo(".hero-copy", { autoAlpha: 0, y: 24 }, { autoAlpha: 1, y: 0, duration: .65, ease: "power2.out" }, 1.26)
               .fromTo(".hero-actions", { autoAlpha: 0, y: 38 }, { autoAlpha: 1, y: 0, duration: .98 }, 1.54)
               .fromTo(navSurface, { autoAlpha: 0, y: -24 }, { autoAlpha: 1, y: 0, duration: 1.1 }, 1.72)
               .fromTo(".hero-foot", { autoAlpha: 0, y: 24 }, { autoAlpha: 1, y: 0, duration: 1 }, 2)
-              .set([heroMedia, ...heroLines, navSurface], { clearProps: "willChange" });
+              .set([heroMedia, navSurface], { clearProps: "willChange" });
           } else if (shouldPlayOpening) {
             finishOpening();
           } else {
@@ -288,9 +301,8 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete, ena
           if (hero) {
             const heroReturnTimeline = gsap.timeline({ paused: true, defaults: { ease: "power3.out" } });
             heroReturnTimeline
-              .fromTo(heroLines, { yPercent: 112, scaleY: .82 }, { yPercent: 0, scaleY: 1, duration: 1.22, stagger: .09, ease: "power4.out", immediateRender: false })
-              .fromTo(hero.querySelector(".kicker"), { autoAlpha: 0, y: 30 }, { autoAlpha: 1, y: 0, duration: .75, immediateRender: false }, "<+.08")
-              .fromTo(hero.querySelector(".hero-copy"), { autoAlpha: 0, y: 34 }, { autoAlpha: 1, y: 0, duration: .88, immediateRender: false }, "<+.12")
+              .fromTo(hero.querySelector(".kicker"), { autoAlpha: 0, y: 24 }, { autoAlpha: 1, y: 0, duration: .65, ease: "power2.out", immediateRender: false })
+              .fromTo(hero.querySelector(".hero-copy"), { autoAlpha: 0, y: 24 }, { autoAlpha: 1, y: 0, duration: .65, ease: "power2.out", immediateRender: false }, "<+.10")
               .fromTo(hero.querySelector(".hero-actions"), { autoAlpha: 0, y: 38 }, { autoAlpha: 1, y: 0, duration: .88, immediateRender: false }, "<+.12")
               .fromTo(hero.querySelector(".hero-foot"), { autoAlpha: 0, y: 24 }, { autoAlpha: 1, y: 0, duration: .8, immediateRender: false }, "<+.12");
 
@@ -307,12 +319,20 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete, ena
 
           root.querySelectorAll<HTMLElement>("[data-motion-section]").forEach((section) => {
             const index = section.querySelector<HTMLElement>("[data-motion-index]");
-            const lines = Array.from(section.querySelectorAll<HTMLElement>("[data-motion-line]"));
+            const lines = Array.from(section.querySelectorAll<HTMLElement>("[data-motion-line]")).filter((line) => !line.hasAttribute("data-closing-statement"));
             const copies = Array.from(section.querySelectorAll<HTMLElement>("[data-motion-copy]"));
             const groups = Array.from(section.querySelectorAll<HTMLElement>("[data-motion-stagger]"));
             const blocks = Array.from(section.querySelectorAll<HTMLElement>(".motion-block"));
             const mediaFrame = section.querySelector<HTMLElement>("[data-motion-media-frame]");
             const media = section.querySelector<HTMLElement>("[data-motion-media]");
+            const closingSegments = Array.from(section.querySelectorAll<HTMLElement>("[data-closing-statement] [data-statement-segment]"));
+            const closingProof = closingSegments.find((segment) => segment.dataset.statementSegment === "证明");
+            const closingBrand = section.querySelector<HTMLElement>("[data-closing-brand]");
+            const closingBrandMark = section.querySelector<HTMLElement>("[data-closing-brand-mark]");
+            const closingBrandArt = section.querySelector<HTMLElement>("[data-closing-brand-art]");
+            if (closingSegments.length && closingProof && closingBrand && closingBrandMark && closingBrandArt) {
+              gsap.set(closingSegments, { autoAlpha: 0, y: 52, scale: .94 });
+            }
             const timeline = gsap.timeline({
               scrollTrigger: {
                 trigger: section,
@@ -323,9 +343,9 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete, ena
               },
               defaults: { ease: "power3.out" },
             });
-            if (index) timeline.fromTo(index, { autoAlpha: 0, y: 32 }, { autoAlpha: 1, y: 0, duration: .75 });
+            if (index) timeline.fromTo(index, { autoAlpha: 0, y: 24 }, { autoAlpha: 1, y: 0, duration: .65, ease: "power2.out" });
             if (lines.length) timeline.fromTo(lines, { yPercent: 112, scaleY: .82 }, { yPercent: 0, scaleY: 1, duration: 1.22, stagger: .09, ease: "power4.out" }, index ? "<+.12" : 0);
-            if (copies.length) timeline.fromTo(copies, { autoAlpha: 0, y: 44 }, { autoAlpha: 1, y: 0, duration: .88, stagger: .10 }, "<+.18");
+            if (copies.length) timeline.fromTo(copies, { autoAlpha: 0, y: 24 }, { autoAlpha: 1, y: 0, duration: .65, ease: "power2.out", stagger: .10 }, "<+.10");
             groups.forEach((group) => {
               const items = Array.from(group.querySelectorAll<HTMLElement>(":scope>[data-motion-stagger-item],:scope>.archive-card,:scope>.border-glow-card"));
               timeline.fromTo(group, { y: 72 }, { y: 0, duration: 1.05 }, "<+.12");
@@ -334,6 +354,60 @@ export function useShowcaseMotion({ rootRef, playOpening, onOpeningComplete, ena
             if (blocks.length) timeline.fromTo(blocks, { autoAlpha: 0, clipPath: "inset(12% 0 12% 0)" }, { autoAlpha: 1, clipPath: "inset(0% 0 0% 0)", duration: 1.15, stagger: .14, clearProps: "clipPath" }, "<+.12");
             if (mediaFrame) timeline.fromTo(mediaFrame, { clipPath: "inset(14% 0 14% 0)" }, { clipPath: "inset(0% 0 0% 0)", duration: 1.35, clearProps: "clipPath" }, "<+.08");
             if (media) timeline.fromTo(media, { scale: 1.06 }, { scale: 1, duration: 1.5 }, "<");
+            if (closingSegments.length && closingProof && closingBrand && closingBrandMark && closingBrandArt) {
+              timeline
+                .set(closingBrand, { autoAlpha: 0 }, 0)
+                .fromTo(closingSegments, { autoAlpha: 0, y: 52, scale: .94 }, {
+                  autoAlpha: 1,
+                  y: 0,
+                  scale: 1,
+                  duration: .68,
+                  stagger: .24,
+                  ease: "power4.out",
+                }, 0)
+                .fromTo(closingProof, { filter: "brightness(1) saturate(1)" }, {
+                  filter: "brightness(1.3) saturate(1.15)",
+                  duration: .24,
+                  repeat: 1,
+                  yoyo: true,
+                  ease: "sine.inOut",
+                  clearProps: "filter",
+                }, "+=.42")
+                .fromTo(closingSegments, { x: 0, y: 0, scale: 1, autoAlpha: 1 }, {
+                  x: (_index, target) => {
+                    if (!(target instanceof HTMLElement)) return 0;
+                    const sectionRect = section.getBoundingClientRect();
+                    const targetRect = target.getBoundingClientRect();
+                    return sectionRect.left + sectionRect.width / 2 - (targetRect.left + targetRect.width / 2);
+                  },
+                  y: (_index, target) => {
+                    if (!(target instanceof HTMLElement)) return 0;
+                    const sectionRect = section.getBoundingClientRect();
+                    const targetRect = target.getBoundingClientRect();
+                    return sectionRect.top + sectionRect.height / 2 - targetRect.bottom;
+                  },
+                  scale: .035,
+                  autoAlpha: 0,
+                  duration: .86,
+                  stagger: .025,
+                  ease: "power4.in",
+                  immediateRender: false,
+                }, "+=.08")
+                .set(closingBrand, { autoAlpha: 1 }, ">+.08")
+                .fromTo(closingBrandMark, { autoAlpha: 0, scale: .2 }, {
+                  autoAlpha: .18,
+                  scale: 1,
+                  duration: .8,
+                  ease: "power2.out",
+                }, "<")
+                .fromTo(closingBrandArt, { autoAlpha: 0, y: 24, scale: .94 }, {
+                  autoAlpha: 1,
+                  y: 0,
+                  scale: 1,
+                  duration: 1.05,
+                  ease: "power3.out",
+                }, "<+.18");
+            }
           });
 
           if (hero && heroMedia) {

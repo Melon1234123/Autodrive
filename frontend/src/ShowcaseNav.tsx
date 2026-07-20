@@ -10,7 +10,6 @@ const navItems = [
   { label: "安全命题", href: "#context" },
   { label: "技术路线", href: "#route" },
   { label: "效果展示", href: "#demo" },
-  { label: "产品体系", href: "#product" },
 ];
 
 export default function ShowcaseNav({ hrefPrefix = "" }: ShowcaseNavProps) {

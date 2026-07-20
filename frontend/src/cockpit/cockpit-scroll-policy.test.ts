@@ -5,22 +5,32 @@ import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveCockpitDestination } from "./cockpit-scroll-policy";
 import { useCockpitScroll } from "./useCockpitScroll";
+import type { CockpitScreen } from "./types";
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 function Harness({
-  reportExpanded = false,
   onScreenChange = vi.fn(),
+  withReport = false,
+  activeScreen = "entry",
+  pendingScreen = null,
+  includeInvalidScreen = false,
 }: {
-  reportExpanded?: boolean;
-  onScreenChange?: (screen: "entry" | "live" | "diagnosis") => void;
+  onScreenChange?: (screen: CockpitScreen) => void;
+  withReport?: boolean;
+  activeScreen?: CockpitScreen;
+  pendingScreen?: CockpitScreen | null;
+  includeInvalidScreen?: boolean;
 }) {
   const rootRef = useRef<HTMLElement | null>(null);
-  const reportRef = useRef<HTMLElement | null>(null);
-  useCockpitScroll({ rootRef, reportRef, reportExpanded, onScreenChange });
+  const screenOrder: readonly CockpitScreen[] = withReport
+    ? ["entry", "live", "diagnosis", "report"]
+    : ["entry", "live", "diagnosis"];
+  useCockpitScroll({ rootRef, onScreenChange, screenOrder, activeScreen, pendingScreen });
 
   return createElement("main", { ref: rootRef, "data-testid": "root" },
     createElement("section", { className: "cockpit-screen", "data-cockpit-screen": "entry" },
@@ -28,10 +38,20 @@ function Harness({
       createElement("button", { type: "button" }, "choose scene"),
       createElement("div", { "data-lenis-prevent": "" }, "native scroller"),
     ),
+    includeInvalidScreen ? createElement("section", {
+      className: "cockpit-screen",
+      "data-cockpit-screen": "not-a-cockpit-screen",
+      "data-testid": "invalid-screen",
+    }) : null,
+    includeInvalidScreen ? createElement("section", {
+      className: "cockpit-screen",
+      "data-testid": "missing-screen",
+    }) : null,
     createElement("section", { className: "cockpit-screen", "data-cockpit-screen": "live" }),
-    createElement("section", { className: "cockpit-screen", "data-cockpit-screen": "diagnosis" },
-      createElement("div", { ref: reportRef, "data-testid": "evidence-header" }),
-    ),
+    createElement("section", { className: "cockpit-screen", "data-cockpit-screen": "diagnosis" }),
+    withReport ? createElement("section", { className: "cockpit-screen", "data-cockpit-screen": "report" },
+      createElement("div", { "data-cockpit-scroll-surface": "", "data-testid": "report-scroll-surface" }),
+    ) : null,
   );
 }
 
@@ -39,57 +59,43 @@ function setOffsetTop(element: Element, offsetTop: number) {
   Object.defineProperty(element, "offsetTop", { configurable: true, value: offsetTop });
 }
 
-function setRect(element: Element, top: number, height: number) {
-  Object.defineProperty(element, "getBoundingClientRect", {
-    configurable: true,
-    value: () => ({
-      top,
-      bottom: top + height,
-      left: 0,
-      right: 100,
-      width: 100,
-      height,
-      x: 0,
-      y: top,
-      toJSON: () => ({}),
-    }),
-  });
-}
-
 function installCockpitGeometry(container: HTMLElement) {
   const root = container.querySelector<HTMLElement>("[data-testid='root']")!;
   const entry = container.querySelector<HTMLElement>("[data-cockpit-screen='entry']")!;
   const live = container.querySelector<HTMLElement>("[data-cockpit-screen='live']")!;
   const diagnosis = container.querySelector<HTMLElement>("[data-cockpit-screen='diagnosis']")!;
-  const evidenceHeader = container.querySelector<HTMLElement>("[data-testid='evidence-header']")!;
+  const report = container.querySelector<HTMLElement>("[data-cockpit-screen='report']");
   setOffsetTop(entry, 0);
   setOffsetTop(live, 1000);
   setOffsetTop(diagnosis, 2000);
-  setOffsetTop(evidenceHeader, 0);
-  Object.defineProperty(evidenceHeader, "offsetParent", { configurable: true, value: diagnosis });
-  const scrolls = [entry, live, diagnosis].map((screen) => {
+  if (report) setOffsetTop(report, 3000);
+  const scrolls = [entry, live, diagnosis, ...(report ? [report] : [])].map((screen) => {
     const scrollIntoView = vi.fn();
     Object.defineProperty(screen, "scrollIntoView", { configurable: true, value: scrollIntoView });
     return scrollIntoView;
   });
-  return { root, entry, live, diagnosis, evidenceHeader, scrolls };
+  return { root, entry, live, diagnosis, report, scrolls };
 }
 
 describe("cockpit scroll policy", () => {
-  it("moves only to adjacent screens before a report expands", () => {
-    expect(resolveCockpitDestination("next", "entry", false, true)).toBe("live");
-    expect(resolveCockpitDestination("next", "live", false, true)).toBe("diagnosis");
-    expect(resolveCockpitDestination("previous", "diagnosis", false, true)).toBe("live");
+  it("moves only to adjacent cockpit screens", () => {
+    const order = ["entry", "live", "diagnosis"] as const;
+    expect(resolveCockpitDestination(order, "next", "entry")).toBe("live");
+    expect(resolveCockpitDestination(order, "next", "live")).toBe("diagnosis");
+    expect(resolveCockpitDestination(order, "previous", "diagnosis")).toBe("live");
   });
 
   it("stops at the first and last cockpit screens", () => {
-    expect(resolveCockpitDestination("previous", "entry", false, true)).toBeNull();
-    expect(resolveCockpitDestination("next", "diagnosis", false, true)).toBeNull();
+    const order = ["entry", "live", "diagnosis"] as const;
+    expect(resolveCockpitDestination(order, "previous", "entry")).toBeNull();
+    expect(resolveCockpitDestination(order, "next", "diagnosis")).toBeNull();
   });
 
-  it("releases snap while reading an expanded report", () => {
-    expect(resolveCockpitDestination("previous", "diagnosis", true, false)).toBeNull();
-    expect(resolveCockpitDestination("previous", "diagnosis", true, true)).toBe("live");
+  it("does not navigate beyond diagnosis until a validated report exists", () => {
+    expect(resolveCockpitDestination(["entry", "live", "diagnosis"], "next", "diagnosis")).toBeNull();
+    expect(
+      resolveCockpitDestination(["entry", "live", "diagnosis", "report"], "next", "diagnosis"),
+    ).toBe("report");
   });
 });
 
@@ -114,8 +120,21 @@ describe("useCockpitScroll", () => {
     expect(onScreenChange).toHaveBeenLastCalledWith("live");
   });
 
-  it("keeps the gesture locked after arriving at an expanded diagnosis screen", () => {
-    const { container } = render(createElement(Harness, { reportExpanded: true }));
+  it("uses instant motion for keyboard and wheel navigation when reduced motion is requested", () => {
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
+    const { container } = render(createElement(Harness));
+    const { root, scrolls } = installCockpitGeometry(container);
+
+    expect(fireEvent.keyDown(window, { key: "PageDown", cancelable: true })).toBe(false);
+    expect(scrolls[1]).toHaveBeenCalledWith({ behavior: "auto", block: "start" });
+
+    scrolls[1].mockClear();
+    expect(fireEvent.wheel(root, { deltaY: 180, cancelable: true })).toBe(false);
+    expect(scrolls[1]).toHaveBeenCalledWith({ behavior: "auto", block: "start" });
+  });
+
+  it("keeps the wheel gesture locked after arriving at the diagnosis screen", () => {
+    const { container } = render(createElement(Harness));
     const { root, scrolls } = installCockpitGeometry(container);
     root.scrollTop = 1000;
     fireEvent.scroll(root);
@@ -170,7 +189,6 @@ describe("useCockpitScroll", () => {
 
     expect(fireEvent.keyDown(window, { key: "PageDown", cancelable: true })).toBe(false);
     expect(scrolls[1]).toHaveBeenCalledTimes(1);
-    expect(root.hasAttribute("data-report-reading")).toBe(false);
   });
 
   it("supports Home and End without hijacking controls or modified and repeated keys", () => {
@@ -199,25 +217,72 @@ describe("useCockpitScroll", () => {
     expect(scrolls[2]).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves every keyboard paging command native below an expanded report header", () => {
-    const onScreenChange = vi.fn();
-    const { container } = render(createElement(Harness, { reportExpanded: true, onScreenChange }));
-    const { root, entry, live, diagnosis, evidenceHeader, scrolls } = installCockpitGeometry(container);
-    root.scrollTop = 2300;
-    setRect(root, 100, 1000);
-    setRect(entry, -2200, 1000);
-    setRect(live, -1200, 1000);
-    setRect(diagnosis, -200, 1000);
-    setRect(evidenceHeader, -200, 40);
+  it("returns from diagnosis to live on an upward root gesture", () => {
+    const { container } = render(createElement(Harness));
+    const { root, scrolls } = installCockpitGeometry(container);
+    root.scrollTop = 2000;
     fireEvent.scroll(root);
-    expect(root).toHaveAttribute("data-report-reading", "true");
-    onScreenChange.mockClear();
 
-    for (const key of ["Home", "End", "ArrowUp", "PageDown", " "]) {
-      expect(fireEvent.keyDown(window, { key, cancelable: true })).toBe(true);
-    }
+    expect(fireEvent.wheel(root, { deltaY: -180, cancelable: true })).toBe(false);
+    expect(scrolls[1]).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+  });
+
+  it("keeps a report workspace wheel gesture in the panel until it reaches an edge", () => {
+    const { container } = render(createElement(Harness, { withReport: true }));
+    const { root, scrolls } = installCockpitGeometry(container);
+    const report = container.querySelector<HTMLElement>("[data-cockpit-screen='report']")!;
+    const surface = container.querySelector<HTMLElement>("[data-testid='report-scroll-surface']")!;
+    Object.defineProperties(surface, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 300 },
+      scrollTop: { configurable: true, value: 50, writable: true },
+    });
+    root.scrollTop = 3000;
+    fireEvent.scroll(root);
+
+    expect(fireEvent.wheel(surface, { deltaY: 80, cancelable: true })).toBe(true);
+    expect(scrolls[2]).not.toHaveBeenCalled();
+
+    surface.scrollTop = 0;
+    expect(fireEvent.wheel(surface, { deltaY: -80, cancelable: true })).toBe(false);
+    expect(scrolls[2]).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+    expect(report).toBeInTheDocument();
+  });
+
+  it("resolves input from the requested report target while auto-scroll is still at entry", () => {
+    const { container } = render(createElement(Harness, {
+      withReport: true,
+      activeScreen: "report",
+      pendingScreen: "report",
+    }));
+    const { root, scrolls } = installCockpitGeometry(container);
+    root.scrollTop = 0;
+
+    expect(fireEvent.wheel(root, { deltaY: 180, cancelable: true })).toBe(false);
     expect(scrolls.every((scroll) => scroll.mock.calls.length === 0)).toBe(true);
-    expect(onScreenChange).not.toHaveBeenCalled();
+  });
+
+  it("ignores missing and invalid cockpit screen declarations instead of assigning positions", () => {
+    const { container } = render(createElement(Harness, { includeInvalidScreen: true }));
+    const root = container.querySelector<HTMLElement>("[data-testid='root']")!;
+    const entry = container.querySelector<HTMLElement>("[data-cockpit-screen='entry']")!;
+    const invalid = container.querySelector<HTMLElement>("[data-testid='invalid-screen']")!;
+    const missing = container.querySelector<HTMLElement>("[data-testid='missing-screen']")!;
+    const live = container.querySelector<HTMLElement>("[data-cockpit-screen='live']")!;
+    const diagnosis = container.querySelector<HTMLElement>("[data-cockpit-screen='diagnosis']")!;
+    [entry, invalid, missing, live, diagnosis].forEach((element, index) => setOffsetTop(element, index * 1000));
+    const liveScroll = vi.fn();
+    const missingScroll = vi.fn();
+    const diagnosisScroll = vi.fn();
+    Object.defineProperty(missing, "scrollIntoView", { configurable: true, value: missingScroll });
+    Object.defineProperty(live, "scrollIntoView", { configurable: true, value: liveScroll });
+    Object.defineProperty(diagnosis, "scrollIntoView", { configurable: true, value: diagnosisScroll });
+    root.scrollTop = 1000;
+
+    expect(fireEvent.wheel(root, { deltaY: 180, cancelable: true })).toBe(false);
+    expect(liveScroll).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+    expect(missingScroll).not.toHaveBeenCalled();
+    expect(diagnosisScroll).not.toHaveBeenCalled();
   });
 
   it("ignores modified, non-cancelable, and Lenis-prevent wheel input", () => {
@@ -229,29 +294,5 @@ describe("useCockpitScroll", () => {
     expect(fireEvent.wheel(root, { deltaY: 180, cancelable: false })).toBe(true);
     expect(fireEvent.wheel(lenisPrevent, { deltaY: 180, cancelable: true })).toBe(true);
     expect(scrolls.every((scroll) => scroll.mock.calls.length === 0)).toBe(true);
-  });
-
-  it("releases native report scrolling until an upward gesture starts at the evidence top", () => {
-    const onScreenChange = vi.fn();
-    const { container } = render(createElement(Harness, { reportExpanded: true, onScreenChange }));
-    const { root, scrolls } = installCockpitGeometry(container);
-
-    root.scrollTop = 2300;
-    fireEvent.scroll(root);
-    expect(root).toHaveAttribute("data-report-reading", "true");
-    expect(root.hasAttribute("data-report-expanded")).toBe(false);
-    expect(fireEvent.wheel(root, { deltaY: -120, cancelable: true })).toBe(true);
-    expect(scrolls[1]).not.toHaveBeenCalled();
-
-    root.scrollTop = 2000;
-    fireEvent.scroll(root);
-    expect(root.hasAttribute("data-report-reading")).toBe(false);
-    expect(fireEvent.wheel(root, { deltaY: -120, cancelable: true })).toBe(false);
-    expect(scrolls[1]).toHaveBeenCalledTimes(1);
-    expect(onScreenChange).not.toHaveBeenCalledWith("live");
-
-    root.scrollTop = 1400;
-    fireEvent.scroll(root);
-    expect(onScreenChange).toHaveBeenLastCalledWith("live");
   });
 });

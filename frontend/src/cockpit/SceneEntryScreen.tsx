@@ -1,5 +1,7 @@
 import type { RefObject } from "react";
 import { ChevronDown, Play } from "lucide-react";
+import LineReveal from "../LineReveal";
+import TextReveal from "../TextReveal";
 import { sceneDisplayName } from "./scene-labels";
 import type { SceneManifestEntry } from "./types";
 
@@ -8,6 +10,7 @@ type SceneEntryScreenProps = {
   selectedSceneKey: string;
   sceneLoading: boolean;
   active: boolean;
+  motionReady: boolean;
   videoSlotRef: RefObject<HTMLDivElement | null>;
   onSceneSelect: (sceneKey: string) => void;
 };
@@ -17,6 +20,7 @@ export function SceneEntryScreen({
   selectedSceneKey,
   sceneLoading,
   active,
+  motionReady,
   videoSlotRef,
   onSceneSelect,
 }: SceneEntryScreenProps) {
@@ -24,16 +28,17 @@ export function SceneEntryScreen({
     <section className="cockpit-screen cockpit-entry" data-cockpit-screen="entry" aria-label="场景入口">
       <div className="cockpit-screen__heading cockpit-entry__heading">
         <div>
-          <p className="cockpit-screen__index">01 / 场景入口</p>
-          <h1>选择一段真实路况，<br /><em>开始证据回放</em></h1>
+          <TextReveal tag="p" className="cockpit-screen__index" enabled={motionReady}>01 / 场景入口</TextReveal>
+          <LineReveal tag="h1" label="选择一段真实路况，开始证据回放" enabled={motionReady} lines={[
+            <>选择一段真实路况，</>,
+            <em>开始证据回放</em>,
+          ]} />
         </div>
-        <p>同一条时间轴将连续驱动视频、感知目标、激光雷达点云、地图轨迹与风险事件。</p>
       </div>
       <div className="cockpit-entry__layout">
         <div className="cockpit-video-frame cockpit-video-frame--entry">
           <div ref={videoSlotRef} className="cockpit-video-slot cockpit-video-slot--entry" />
           <div className="cockpit-video-caption" aria-hidden="true">
-            <span><i />真实前视视频</span>
             <strong>{sceneDisplayName(scenes.find((scene) => scene.id === selectedSceneKey) ?? scenes[0])}</strong>
           </div>
         </div>

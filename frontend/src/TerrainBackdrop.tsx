@@ -16,6 +16,9 @@ type TerrainBackdropProps = {
   view: TerrainView;
   preset: ShowcaseTerrainPreset;
   risk: TerrainRiskLevel;
+  animated?: boolean;
+  className?: string;
+  testId?: string;
 };
 
 type TerrainUniforms = {
@@ -50,7 +53,7 @@ function applyTarget(uniforms: TerrainUniforms, target: TerrainTarget, drift: nu
   setColor(uniforms.uLineColor.value, target.lineColor);
 }
 
-export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropProps) {
+export default function TerrainBackdrop({ view, preset, risk, animated = true, className = "", testId = "terrain-backdrop" }: TerrainBackdropProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const initialTargetRef = useRef<TerrainTarget>(resolveTerrainTarget(view, preset, risk));
   const currentTargetRef = useRef<TerrainTarget>(initialTargetRef.current);
@@ -182,13 +185,15 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
       if (shaderFailed) throw new Error("Terrain shader compilation failed");
     };
 
+    const usesStaticFrame = () => !animated || reduced;
+
     function scheduleStaticSubmit() {
-      if (disposed || !reduced || document.hidden || staticTimerId !== null) return;
+      if (disposed || !usesStaticFrame() || document.hidden || staticTimerId !== null) return;
       const elapsed = performance.now() - lastSubmit;
       const delay = Math.max(FRAME_INTERVAL_MS - elapsed, 0);
       staticTimerId = window.setTimeout(() => {
         staticTimerId = null;
-        if (disposed || !reduced) return;
+        if (disposed || !usesStaticFrame()) return;
         if (submitSafely(performance.now()) === "throttled") scheduleStaticSubmit();
       }, delay);
     }
@@ -211,7 +216,7 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
       if (document.hidden) {
         if (staticTimerId !== null) window.clearTimeout(staticTimerId);
         staticTimerId = null;
-      } else if (reduced) drawStaticRef.current?.();
+      } else if (usesStaticFrame()) drawStaticRef.current?.();
     }
 
     function handleMotion(event: MediaQueryListEvent) {
@@ -221,7 +226,7 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
       frameId = null;
       if (staticTimerId !== null) window.clearTimeout(staticTimerId);
       staticTimerId = null;
-      if (reduced) drawStaticRef.current?.();
+      if (usesStaticFrame()) drawStaticRef.current?.();
       else {
         lastTick = performance.now();
         frameId = requestAnimationFrame(tick);
@@ -267,7 +272,7 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
       resize();
 
       drawStaticRef.current = () => {
-        if (!reduced || disposed) return;
+        if (!usesStaticFrame() || disposed) return;
         currentTargetRef.current = transitionRef.current.to;
         transitionRef.current = {
           from: currentTargetRef.current,
@@ -286,23 +291,23 @@ export default function TerrainBackdrop({ view, preset, risk }: TerrainBackdropP
       document.addEventListener("visibilitychange", handleVisibility);
       motion.addEventListener("change", handleMotion);
       canvas.addEventListener("webglcontextlost", handleContextLoss);
-      if (!reduced) frameId = requestAnimationFrame(tick);
+      if (!usesStaticFrame()) frameId = requestAnimationFrame(tick);
     } catch (error) {
       fallbackToStatic(error, true);
     }
 
     return () => teardown(!canvas.isConnected);
-  }, []);
+  }, [animated]);
 
   const hidden = view === "showcase" && preset === "hidden";
   return (
     <div
       aria-hidden="true"
-      className={`terrain-backdrop${fallback ? " terrain-backdrop--fallback" : ""}${hidden ? " terrain-backdrop--hidden" : ""}`}
+      className={`terrain-backdrop${fallback ? " terrain-backdrop--fallback" : ""}${hidden ? " terrain-backdrop--hidden" : ""}${className ? ` ${className}` : ""}`}
       data-instance-id={instanceId}
       data-preset={preset}
       data-state={fallback ? "fallback" : "webgl"}
-      data-testid="terrain-backdrop"
+      data-testid={testId}
       data-view={view}
       style={{ pointerEvents: "none" }}
     >

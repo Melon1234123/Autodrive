@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   decodePointCloud,
+  findLidarFrameAtOrBefore,
+  findLidarFrameIndexAtOrBefore,
   findNearestLidarFrame,
   LidarFrameCache,
+  LidarFrameSequencer,
   LidarRequestGate,
   resolveLidarRequestCommit,
+  selectLidarFrameWindow,
 } from "./lidar";
 
 describe("LiDAR data helpers", () => {
@@ -22,6 +26,55 @@ describe("LiDAR data helpers", () => {
         0.31,
       )?.file,
     ).toBe("b.bin");
+  });
+
+  it("holds the recorded scan until the next timestamp", () => {
+    const index = {
+      version: 1,
+      pointFormat: "xyzI-f32-le" as const,
+      frames: [
+        { time: 0, timestampUs: 0, file: "0.bin", pointCount: 1 },
+        { time: 0.1, timestampUs: 100_000, file: "1.bin", pointCount: 1 },
+        { time: 0.2, timestampUs: 200_000, file: "2.bin", pointCount: 1 },
+        { time: 0.3, timestampUs: 300_000, file: "3.bin", pointCount: 1 },
+      ],
+    };
+
+    expect(findLidarFrameIndexAtOrBefore(index, -1)).toBe(0);
+    expect(findLidarFrameAtOrBefore(index, 0.199)?.file).toBe("1.bin");
+    expect(findLidarFrameAtOrBefore(index, 0.2)?.file).toBe("2.bin");
+    expect(findLidarFrameIndexAtOrBefore(index, 99)).toBe(3);
+  });
+
+  it("selects a bounded history and future preload window", () => {
+    const index = {
+      version: 1,
+      pointFormat: "xyzI-f32-le" as const,
+      frames: [
+        { time: 0, timestampUs: 0, file: "0.bin", pointCount: 1 },
+        { time: 0.1, timestampUs: 100_000, file: "1.bin", pointCount: 1 },
+        { time: 0.2, timestampUs: 200_000, file: "2.bin", pointCount: 1 },
+        { time: 0.3, timestampUs: 300_000, file: "3.bin", pointCount: 1 },
+      ],
+    };
+
+    expect(selectLidarFrameWindow(index, 2, 1, 10).map((frame) => frame.file)).toEqual([
+      "1.bin", "2.bin", "3.bin",
+    ]);
+  });
+
+  it("queues intermediate recorded scans before a later playback target", () => {
+    const sequence = new LidarFrameSequencer();
+
+    sequence.setTarget(0);
+    expect(sequence.next()).toBe(0);
+    sequence.markPresented(0);
+    sequence.setTarget(3);
+    expect(sequence.next()).toBe(1);
+    sequence.markPresented(1);
+    expect(sequence.next()).toBe(2);
+    sequence.markPresented(2);
+    expect(sequence.next()).toBe(3);
   });
 
   it("decodes four float32 values per point", () => {

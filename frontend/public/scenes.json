@@ -3,6 +3,16 @@
   "defaultSceneId": "default",
   "scenes": [
     {
+      "id": "default",
+      "label": "城市路口侧向超车",
+      "description": "Scooter, peds on sidewalk, bus, cars, truck, fake construction worker, bicycle, cross intersection, car overtaking us",
+      "videoFile": "/sample.mp4",
+      "telemetryFile": "/telemetry.json",
+      "perceptionFile": "/perception.json",
+      "metadataFile": "/dataset-meta.json",
+      "lidarIndexFile": "/scenes/default/lidar/index.json"
+    },
+    {
       "id": "scene-0061",
       "label": "工区左转跟车",
       "description": "Parked truck, construction, intersection, turn left, following a van",
@@ -51,16 +61,6 @@
       "perceptionFile": "/scenes/scene-0757/perception.json",
       "metadataFile": "/scenes/scene-0757/dataset-meta.json",
       "lidarIndexFile": "/scenes/scene-0757/lidar/index.json"
-    },
-    {
-      "id": "default",
-      "label": "城市路口侧向超车",
-      "description": "Scooter, peds on sidewalk, bus, cars, truck, fake construction worker, bicycle, cross intersection, car overtaking us",
-      "videoFile": "/sample.mp4",
-      "telemetryFile": "/telemetry.json",
-      "perceptionFile": "/perception.json",
-      "metadataFile": "/dataset-meta.json",
-      "lidarIndexFile": "/scenes/default/lidar/index.json"
     },
     {
       "id": "scene-0916",

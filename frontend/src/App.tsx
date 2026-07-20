@@ -5,27 +5,32 @@ import { deriveRiskEvents } from "./risk-events";
 import type { RiskEvent } from "./risk-events";
 import BorderGlow from "./BorderGlow";
 import ContextCardsDemo, { ContextCardsSection } from "./ContextCardsDemo";
+import ClosingTypographyDemo from "./ClosingTypographyDemo";
+import DeferredVideo from "./DeferredVideo";
 import MotionHeadline from "./MotionHeadline";
 import PositioningSection from "./PositioningSection";
 import PositioningOrbitDemo from "./PositioningOrbitDemo";
 import ShowcaseNav from "./ShowcaseNav";
 import ShowcaseOpening from "./ShowcaseOpening";
 import TechnicalRouteSection from "./TechnicalRouteSection";
-import { LidarBev, type LidarHistoryCloud } from "./LidarBev";
+import type { LidarHistoryCloud } from "./LidarBev";
+import { LazyLidarBev, preloadLidarBev } from "./LazyLidarBev";
 import TerrainBackdrop from "./TerrainBackdrop";
 import { CockpitExperience } from "./cockpit/CockpitExperience";
-import { createDiagnosisJob, pollDiagnosisJob } from "./cockpit/diagnosis-client";
-import type { CockpitScreen, DiagnosisReport, DiagnosisStage } from "./cockpit/types";
+import type { CockpitScreen } from "./cockpit/types";
+import { DiagnosisProgress } from "./features/diagnosis/DiagnosisProgress";
+import { useDiagnosisRun } from "./features/diagnosis/useDiagnosisRun";
 import type { ShowcaseTerrainPreset } from "./terrain-presets";
 import { useShowcaseMotion } from "./useShowcaseMotion";
 import { useTerrainSectionPalette } from "./useTerrainSectionPalette";
 import { ViewTransitionStage, type ViewTransitionPhase } from "./ViewTransitionStage";
 import {
-  findNearestLidarFrame,
+  findLidarFrameAtOrBefore,
+  findLidarFrameIndexAtOrBefore,
   LidarFrameCache,
-  LidarRequestGate,
+  LidarFrameSequencer,
   loadLidarIndex,
-  resolveLidarRequestCommit,
+  selectLidarFrameWindow,
 } from "./lidar";
 import type { LidarFrameIndex, LidarIndex } from "./lidar";
 import {
@@ -36,22 +41,11 @@ import {
 } from "./bev-orientation";
 import { routeTangentAndNormal, selectMapGeometry, type EgoPoint } from "./map-geometry";
 import {
-  AlertTriangle,
   ArrowDownRight,
-  ArrowUpRight,
-  BrainCircuit,
-  CircleCheck,
-  Database,
-  FileSearch,
-  Layers3,
-  LoaderCircle,
-  Map,
+  ChevronRight,
   LocateFixed,
   Minus,
-  Move,
   Plus,
-  ShieldCheck,
-  Sparkles,
   History,
 } from "lucide-react";
 
@@ -63,6 +57,9 @@ type LidarStatus = "loading" | "unavailable" | "ready" | "error";
 
 export const DEFAULT_MAP_VIEWPORT: MapViewport = { zoom: 1, offsetX: 0, offsetY: 0 };
 const clampMapZoom = (zoom: number) => Math.min(2.6, Math.max(0.55, zoom));
+const LIDAR_HISTORY_FRAME_COUNT = 2;
+const LIDAR_PREFETCH_FRAME_COUNT = 10;
+const LIDAR_CACHE_FRAME_COUNT = 32;
 
 type TelemetryFrame = {
   time: number;
@@ -179,30 +176,10 @@ const riskText: Record<RiskLevel, string> = {
   unknown: "未知",
 };
 
-const statusText: Record<ConnectionStatus, string> = {
-  connecting: "连接中",
-  connected: "已连接",
-  disconnected: "已断开",
-  error: "连接错误",
-};
-
 const modeText: Record<DiagnosisMode, string> = {
   model: "真实模型",
   fallback: "规则 fallback",
   unknown: "未知",
-};
-
-const diagnosisStageText: Record<DiagnosisStage, string> = {
-  queued: "等待调度",
-  validation: "数据校验",
-  timeline: "时间线对齐",
-  features: "特征提取",
-  events: "风险事件",
-  causality: "因果分析",
-  report: "报告生成",
-  enhancement: "模型增强",
-  complete: "已完成",
-  failed: "失败",
 };
 
 function findNearestFrame<T extends { time: number }>(frames: T[], currentTime: number) {
@@ -215,6 +192,92 @@ function findNearestFrame<T extends { time: number }>(frames: T[], currentTime: 
     const nearestDistance = Math.abs(nearest.time - currentTime);
     return currentDistance < nearestDistance ? frame : nearest;
   }, frames[0]);
+}
+
+function interpolateAngle(from: number, to: number, progress: number) {
+  const fullTurn = Math.PI * 2;
+  const delta = ((to - from + Math.PI) % fullTurn + fullTurn) % fullTurn - Math.PI;
+  return from + delta * progress;
+}
+
+function interpolatePoint(from: Point3, to: Point3, progress: number): Point3 {
+  return {
+    x: from.x + (to.x - from.x) * progress,
+    y: from.y + (to.y - from.y) * progress,
+    z: from.z + (to.z - from.z) * progress,
+  };
+}
+
+function interpolatePerceptionObject(
+  from: PerceptionObject,
+  to: PerceptionObject,
+  progress: number,
+): PerceptionObject {
+  const cameraBox = from.cameraBox && to.cameraBox
+    ? {
+        x: from.cameraBox.x + (to.cameraBox.x - from.cameraBox.x) * progress,
+        y: from.cameraBox.y + (to.cameraBox.y - from.cameraBox.y) * progress,
+        width: from.cameraBox.width + (to.cameraBox.width - from.cameraBox.width) * progress,
+        height: from.cameraBox.height + (to.cameraBox.height - from.cameraBox.height) * progress,
+        imageWidth: to.cameraBox.imageWidth,
+        imageHeight: to.cameraBox.imageHeight,
+        depth: from.cameraBox.depth + (to.cameraBox.depth - from.cameraBox.depth) * progress,
+      }
+    : progress < 0.5 ? from.cameraBox : to.cameraBox;
+  const source = progress < 0.5 ? from : to;
+  return {
+    ...source,
+    x: from.x + (to.x - from.x) * progress,
+    y: from.y + (to.y - from.y) * progress,
+    z: from.z + (to.z - from.z) * progress,
+    width: from.width + (to.width - from.width) * progress,
+    length: from.length + (to.length - from.length) * progress,
+    height: from.height + (to.height - from.height) * progress,
+    yaw: interpolateAngle(from.yaw, to.yaw, progress),
+    cameraBox,
+  };
+}
+
+/** Smooth the visual evidence between native perception samples without inventing new targets. */
+export function interpolatePerceptionFrame(frames: PerceptionFrame[], currentTime: number): PerceptionFrame | null {
+  if (frames.length === 0) return null;
+  const nextIndex = frames.findIndex((frame) => frame.time >= currentTime);
+  if (nextIndex <= 0) return frames[0];
+  if (nextIndex === -1) return frames[frames.length - 1];
+
+  const from = frames[nextIndex - 1];
+  const to = frames[nextIndex];
+  if (Math.abs(to.time - from.time) < Number.EPSILON || currentTime <= from.time) return from;
+  if (currentTime >= to.time) return to;
+  const progress = (currentTime - from.time) / (to.time - from.time);
+  const fromObjects = new globalThis.Map(from.objects.map((object) => [object.id, object]));
+  const toObjects = new globalThis.Map(to.objects.map((object) => [object.id, object]));
+  const objectIds = [...new Set([...from.objects.map((object) => object.id), ...to.objects.map((object) => object.id)])];
+  const objects = objectIds.flatMap((id) => {
+    const fromObject = fromObjects.get(id);
+    const toObject = toObjects.get(id);
+    if (fromObject && toObject) return [interpolatePerceptionObject(fromObject, toObject, progress)];
+    return [progress < 0.5 ? fromObject : toObject].filter((object): object is PerceptionObject => Boolean(object));
+  });
+  const sourceFrame = progress < 0.5 ? from : to;
+  const ego = {
+    x: from.ego.x + (to.ego.x - from.ego.x) * progress,
+    y: from.ego.y + (to.ego.y - from.ego.y) * progress,
+    yaw: interpolateAngle(from.ego.yaw, to.ego.yaw, progress),
+    latitude: from.ego.latitude + (to.ego.latitude - from.ego.latitude) * progress,
+    longitude: from.ego.longitude + (to.ego.longitude - from.ego.longitude) * progress,
+  };
+  return {
+    ...sourceFrame,
+    time: currentTime,
+    timestampUs: Math.round(from.timestampUs + (to.timestampUs - from.timestampUs) * progress),
+    ego,
+    objects,
+    plannedPath: from.plannedPath.length === to.plannedPath.length
+      ? from.plannedPath.map((point, index) => interpolatePoint(point, to.plannedPath[index], progress))
+      : sourceFrame.plannedPath,
+    lanes: sourceFrame.lanes,
+  };
 }
 
 /** Returns null for camera-only scenes so stale LiDAR data is never retained. */
@@ -242,12 +305,6 @@ export type DiagnosisRequestOwner = {
   socketGeneration: number;
 };
 
-export type DiagnosisJobOwner = {
-  sceneGeneration: number;
-  sceneKey: string;
-  jobId: string;
-};
-
 export function shouldAcceptDiagnosisResponse(
   pending: DiagnosisRequestOwner | null,
   activeSceneGeneration: number,
@@ -260,24 +317,6 @@ export function shouldAcceptDiagnosisResponse(
     && pending.requestGeneration === activeRequestGeneration
     && pending.socketGeneration === responseSocketGeneration,
   );
-}
-
-export function shouldAcceptDiagnosisJobUpdate(
-  owner: DiagnosisJobOwner | null,
-  activeSceneGeneration: number,
-  activeSceneKey: string,
-  jobId: string,
-): boolean {
-  return Boolean(
-    owner
-    && owner.sceneGeneration === activeSceneGeneration
-    && owner.sceneKey === activeSceneKey
-    && owner.jobId === jobId,
-  );
-}
-
-export function advanceDiagnosisProgress(current: number, next: number): number {
-  return Math.max(current, next);
 }
 
 export function resolveLidarDisplayState(
@@ -300,7 +339,7 @@ export function resolveLidarRequestCandidate(
   currentTime: number,
 ): { frame: LidarFrameIndex; key: string } | null {
   if (!ownedIndex || ownedIndex.sceneId !== selectedSceneId) return null;
-  const frame = findNearestLidarFrame(ownedIndex.index, currentTime);
+  const frame = findLidarFrameAtOrBefore(ownedIndex.index, currentTime);
   return frame ? { frame, key: resolveLidarRequestKey(selectedSceneId, frame) } : null;
 }
 
@@ -647,8 +686,8 @@ function useMapCanvas(
     return () => resizeObserver.disconnect();
   }, [active, canvasRef, renderOwner]);
 
-  useEffect(() => {
-    if (!active || canvasSize.width <= 0 || canvasSize.height <= 0) {
+  useLayoutEffect(() => {
+    if (!active) {
       return;
     }
 
@@ -657,8 +696,9 @@ function useMapCanvas(
       return;
     }
 
-    const cssWidth = canvasSize.width;
-    const cssHeight = canvasSize.height;
+    const bounds = canvas.parentElement?.getBoundingClientRect();
+    const cssWidth = Math.max(bounds?.width ?? canvasSize.width, 280);
+    const cssHeight = Math.max(bounds?.height ?? canvasSize.height, 180);
     const dpr = window.devicePixelRatio || 1;
     const backingWidth = Math.round(cssWidth * dpr);
     const backingHeight = Math.round(cssHeight * dpr);
@@ -780,7 +820,9 @@ function useMapCanvas(
       return;
     }
 
-    const currentIndex = currentFrame ? Math.max(0, frames.indexOf(currentFrame)) : 0;
+    const currentIndex = currentFrame
+      ? Math.max(0, frames.indexOf(findNearestFrame(frames, currentFrame.time)!))
+      : 0;
     const heading = current.ego.yaw;
     const cos = Math.cos(heading);
     const sin = Math.sin(heading);
@@ -941,7 +983,13 @@ export function ProjectSite({
   }, [restoreScrollTop]);
 
   useTerrainSectionPalette(showcaseRef, onTerrainPresetChange);
-  useShowcaseMotion({ rootRef: showcaseRef, playOpening, onOpeningComplete, enabled: active });
+  useShowcaseMotion({
+    rootRef: showcaseRef,
+    playOpening,
+    onOpeningComplete,
+    enabled: active,
+    initialScrollTop: restoreScrollTop,
+  });
   return <main className="showcase" ref={setShowcaseRoot}>
     <ShowcaseOpening />
     <ShowcaseNav />
@@ -952,13 +1000,13 @@ export function ProjectSite({
       <div className="hero-wash" />
       <div className="hero-content content-width">
         <p className="kicker"><span /> 可解释自动驾驶</p>
-        <MotionHeadline as="h1" label="让每一次自动驾驶决策有据可循" lines={[
+        <MotionHeadline as="h1" split label="让每一次自动驾驶决策有据可循" startDelay={playOpening ? .88 : 0} lines={[
           <>让每一次</>, <><em>自动驾驶决策</em>有据可循</>,
         ]} />
         <p className="hero-copy" data-motion-copy>面向智能驾驶研发、测试验证与安全审计的多智能体协作诊断平台。将不可见的失效路径，转化为可追溯、可复现、可优化的证据闭环。</p>
-        <div className="hero-actions"><button className="primary-cta" type="button" onClick={onOpenDemo}>进入效果展示 <ArrowDownRight size={18} /></button><a className="text-cta" href="#product">了解系统架构 <ArrowUpRight size={17} /></a></div>
+        <div className="hero-actions"><button className="primary-cta" type="button" onClick={onOpenDemo}>进入效果展示 <ArrowDownRight size={18} /></button></div>
       </div>
-      <div className="hero-foot content-width"><span>HANGZHOU DIANZI UNIVERSITY</span><span>2026 / RESEARCH PROTOTYPE</span><span>SCROLL TO EXPLORE ↓</span></div>
+      <div className="hero-foot content-width"><span>杭州电子科技大学</span><span>2026 / 智驾卫士</span><span>向下滚动探索 ↓</span></div>
     </section>
 
     <PositioningSection />
@@ -967,17 +1015,23 @@ export function ProjectSite({
 
     <TechnicalRouteSection />
 
-    <section className="demo-section" data-motion-section data-terrain-preset="demo" id="demo"><div className="content-width"><div className="demo-head"><div><div className="section-index" data-motion-index>04 / LIVE PROTOTYPE</div><MotionHeadline as="h2" label="真实场景中的证据链，直接进入驾驶舱" lines={[
-      <>真实场景中的证据链，</>, <><em>直接进入驾驶舱</em></>,
-    ]} /></div></div><BorderGlow as="div" className="demo-card motion-block" backgroundColor="#10292b"><div className="demo-visual" data-motion-media-frame><video data-motion-media src="/sample.mp4" autoPlay muted loop playsInline /><div className="demo-overlay"><b>风险诊断<br />驾驶舱</b><button type="button" onClick={onOpenDemo}>进入驾驶舱 <ArrowUpRight size={17} aria-hidden="true" /></button></div></div></BorderGlow></div></section>
+    <section className="demo-section" data-motion-section data-terrain-preset="demo" id="demo"><div className="content-width"><div className="demo-head"><div><div className="section-index" data-motion-index>04 / 效果展示</div><MotionHeadline as="h2" className="demo-title" label="真实道路数据；定位自动驾驶风险" lines={[
+      <>真实道路数据</>, <>定位自动驾驶风险</>,
+    ]} /></div></div><BorderGlow as="div" className="demo-card motion-block" backgroundColor="#10292b"><div className="demo-visual" data-motion-media-frame><DeferredVideo data-motion-media src="/sample.mp4" autoPlay muted loop playsInline /><div className="demo-overlay"><article className="demo-story-panel"><span className="demo-story-kicker">真实道路数据 · 诊断回放</span><h3><span>风险诊断</span><span>驾驶舱</span></h3><p className="demo-story-lead">从关键帧，追溯完整因果链</p><p className="demo-story-copy">同步视频、感知、地图与车辆状态，定位风险对象、触发时刻和关键证据。</p></article><div className="demo-swipe-glass" aria-hidden="true" /><button className="demo-swipe-cta" type="button" aria-label="进入驾驶舱" onClick={onOpenDemo}><span className="demo-swipe-label"><span className="demo-swipe-label-motion"><span>右滑进入</span><span>驾驶舱</span></span></span><span className="demo-swipe-chevrons" aria-hidden="true"><ChevronRight size={36} strokeWidth={1.45} /><ChevronRight size={36} strokeWidth={1.45} /></span></button></div></div></BorderGlow></div></section>
 
-    <section className="product-section" data-motion-section data-terrain-preset="product" id="product"><div className="content-width"><div className="product-top"><div><div className="section-index" data-motion-index>05 / PRODUCT CAPABILITY</div><MotionHeadline as="h2" label="把每一次异常沉淀为下一次进化" lines={[
-      <>把每一次异常</>, <>沉淀为下一次<em>进化</em></>,
-    ]} /></div><p data-motion-copy>产品能力围绕研发测试闭环展开：数据标准化接入、诊断任务编排、证据解码和训练数据包交付。</p></div><BorderGlow as="div" className="architecture-card motion-block" backgroundColor="#143235"><div className="architecture-title"><Sparkles size={18} /> 多智能体协作诊断引擎 <span>DIAGNOSIS ORCHESTRATION</span></div><div className="agent-flow" data-motion-stagger><BorderGlow as="div" className="agent-node" backgroundColor="rgba(255,255,255,.04)"><Database /><small>01</small><h3>诊断编排 Agent</h3><p>根据场景风险动态调度感知、决策与轨迹分析任务</p></BorderGlow><i /><BorderGlow as="div" className="agent-node active" backgroundColor="#d9f35b"><BrainCircuit /><small>02</small><h3>证据解码</h3><p>把模型偏差、目标风险和逻辑链组织成诊断病历</p></BorderGlow><i /><BorderGlow as="div" className="agent-node" backgroundColor="rgba(255,255,255,.04)"><FileSearch /><small>03</small><h3>训练数据包</h3><p>生成正确/错误推理对与高价值复盘样本</p></BorderGlow><i /><BorderGlow as="div" className="agent-node" backgroundColor="rgba(255,255,255,.04)"><ShieldCheck /><small>04</small><h3>工程化交付</h3><p>面向测试、审计和模型迭代输出可复用证据</p></BorderGlow></div></BorderGlow><div className="feature-grid" data-motion-stagger><BorderGlow as="article" backgroundColor="#f7faf7"><CircleCheck size={19} /><h3>算法结构描述协议</h3><p>不触碰模型权重，兼顾接入深度、数据主权与跨架构适配。</p></BorderGlow><BorderGlow as="article" backgroundColor="#f7faf7"><CircleCheck size={19} /><h3>数学 + 逻辑双重证据</h3><p>连接感知语义漂移与决策逻辑审计，让诊断结论可验证。</p></BorderGlow><BorderGlow as="article" backgroundColor="#f7faf7"><CircleCheck size={19} /><h3>诊断即训练</h3><p>从失效根因反向生成正确/错误推理对，驱动针对性迭代。</p></BorderGlow></div></div></section>
-
-    <footer className="showcase-footer showcase-footer-centered" data-motion-section data-terrain-preset="closing" id="contact"><div className="content-width footer-content"><p className="kicker"><span /> LET'S MAKE AUTONOMY ACCOUNTABLE</p><MotionHeadline as="h2" label="安全不是一句承诺。它应当被证明。" lines={[
-      <>安全不是一句承诺。</>, <><em>它应当被证明。</em></>,
-    ]} /><p className="footer-value" data-motion-copy>把异常片段、感知证据、决策逻辑和优化样本沉淀到同一条可追溯链路里。</p><div className="footer-bottom" data-motion-stagger><span data-motion-stagger-item>智驾卫士 / DRIVEGUARD</span><span data-motion-stagger-item>杭州电子科技大学 · 计算机学院</span><span data-motion-stagger-item>2026 RESEARCH PROTOTYPE</span></div></div></footer>
+    <footer className="showcase-footer showcase-footer-centered showcase-footer-road" data-motion-section data-terrain-preset="closing" id="contact">
+      <div className="footer-road-art" aria-hidden="true" />
+      <div className="footer-road-mask" aria-hidden="true" />
+      <TerrainBackdrop view="showcase" preset="closing" risk="unknown" animated={false} className="closing-contour-overlay" testId="closing-contour-overlay" />
+      <div className="footer-brand-backdrop">
+        <span aria-hidden="true" className="footer-statement footer-statement--primary" data-closing-statement="upper" data-motion-line><span data-statement-segment="安全"><span className="footer-statement-face">安全</span></span><strong className="footer-statement-focus--primary" data-statement-segment="不是"><span className="footer-statement-face">不是</span></strong><span data-statement-segment="一句承诺"><span className="footer-statement-face">一句承诺</span></span></span>
+        <span aria-hidden="true" className="footer-statement footer-statement--secondary" data-closing-statement="lower" data-motion-line><span className="footer-statement-prefix" data-statement-segment="它应当被"><span className="footer-statement-face">它应当被</span></span><strong className="footer-statement-focus--secondary" data-statement-segment="证明"><span className="footer-statement-face">证明</span></strong></span>
+        <div className="footer-brand-lockup" data-closing-brand>
+          <img className="footer-brand-mark" src="/driveguard-mark.png" alt="" aria-hidden="true" data-closing-brand-mark />
+          <img className="footer-brand-art" src="/closing-brand-art.png" alt="智驾卫士" data-closing-brand-art />
+        </div>
+      </div>
+    </footer>
     </div>
   </main>;
 }
@@ -987,17 +1041,17 @@ function App() {
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const publishedPlaybackTimeRef = useRef(0);
   const mapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const mapDragStartRef = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null);
   const sceneLoadAbortRef = useRef<AbortController | null>(null);
   const lidarPlaybackAbortRef = useRef<AbortController | null>(null);
-  const lidarRequestGateRef = useRef(new LidarRequestGate());
+  const lidarSequencerRef = useRef(new LidarFrameSequencer());
+  const renderedLidarFrameRef = useRef<LidarFrameIndex | null>(null);
   const sceneGenerationRef = useRef(0);
   const diagnosisRequestGenerationRef = useRef(0);
   const socketGenerationRef = useRef(0);
   const pendingDiagnosisRef = useRef<DiagnosisRequestOwner | null>(null);
-  const diagnosisJobAbortRef = useRef<AbortController | null>(null);
-  const diagnosisJobOwnerRef = useRef<DiagnosisJobOwner | null>(null);
   const showcaseOpeningPlayedRef = useRef(false);
   const handleShowcaseOpeningComplete = useCallback(() => {
     showcaseOpeningPlayedRef.current = true;
@@ -1005,14 +1059,9 @@ function App() {
   const [telemetry, setTelemetry] = useState<TelemetryFrame[]>([]);
   const [perception, setPerception] = useState<PerceptionFrame[]>([]);
   const [currentTime, setCurrentTime] = useState(0);
-  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
+  const [, setConnectionStatus] = useState<ConnectionStatus>("connecting");
   const [diagnosing, setDiagnosing] = useState(false);
   const [diagnosis, setDiagnosis] = useState<DiagnosisResult | null>(null);
-  const [diagnosisReport, setDiagnosisReport] = useState<DiagnosisReport | null>(null);
-  const [reportRunning, setReportRunning] = useState(false);
-  const [reportStage, setReportStage] = useState<DiagnosisStage>("queued");
-  const [reportProgress, setReportProgress] = useState(0);
-  const [reportError, setReportError] = useState<string | null>(null);
   const [dataVersion, setDataVersion] = useState("manifest-v1");
   const [datasetMeta, setDatasetMeta] = useState<DatasetMeta | null>(null);
   const [scenes, setScenes] = useState<SceneManifestEntry[]>([LEGACY_SCENE]);
@@ -1034,6 +1083,7 @@ function App() {
   const [cockpitScreen, setCockpitScreen] = useState<CockpitScreen>("entry");
   const handleOpenDemo = useCallback(() => {
     if (viewPhase !== "site") return;
+    void preloadLidarBev();
     showcaseScrollTopRef.current = showcaseRootRef.current?.scrollTop ?? 0;
     showcaseOpeningPlayedRef.current = true;
     setCockpitScreen("entry");
@@ -1064,13 +1114,13 @@ function App() {
   const [ownedLidarIndex, setOwnedLidarIndex] = useState<OwnedLidarIndex | null>(null);
   const [lidarStatus, setLidarStatus] = useState<LidarStatus>("loading");
   const [lidarError, setLidarError] = useState<string | null>(null);
-  const [lidarCache] = useState(() => new LidarFrameCache());
+  const [lidarCache] = useState(() => new LidarFrameCache(LIDAR_CACHE_FRAME_COUNT));
   const [currentPointCloud, setCurrentPointCloud] = useState<Float32Array | null>(null);
   const [lidarHistory, setLidarHistory] = useState<LidarHistoryCloud[]>([]);
   const [renderedLidarFrame, setRenderedLidarFrame] = useState<LidarFrameIndex | null>(null);
 
   const currentFrame = useMemo(() => findNearestFrame(telemetry, currentTime), [telemetry, currentTime]);
-  const currentPerception = useMemo(() => findNearestFrame(perception, currentTime), [perception, currentTime]);
+  const currentPerception = useMemo(() => interpolatePerceptionFrame(perception, currentTime), [perception, currentTime]);
   const frameRisk = deriveFrameRisk(currentFrame, currentPerception);
   const panelRisk = diagnosis?.riskLevel ?? frameRisk;
   const highRiskObjects = currentPerception?.objects.filter((object) => object.risk === "high").length ?? 0;
@@ -1089,6 +1139,20 @@ function App() {
       .sort((a, b) => riskScore(b.risk) - riskScore(a.risk) || (a.cameraBox?.depth ?? 999) - (b.cameraBox?.depth ?? 999))
       .slice(0, 14) ?? [];
   const selectedScene = scenes.find((scene) => scene.id === selectedSceneId) ?? LEGACY_SCENE;
+  const diagnosisRun = useDiagnosisRun({
+    apiUrl: API_URL,
+    sceneKey: selectedScene.id,
+    sceneName: selectedScene.label,
+    dataVersion,
+  });
+  const diagnosisStatusRef = useRef(diagnosisRun.status);
+  diagnosisStatusRef.current = diagnosisRun.status;
+  const cancelDiagnosisRun = diagnosisRun.cancel;
+  const startDiagnosisRun = diagnosisRun.start;
+  const rerunDiagnosisRun = diagnosisRun.rerun;
+  useEffect(() => {
+    if (viewPhase === "exiting" && diagnosisRun.status === "running") cancelDiagnosisRun();
+  }, [cancelDiagnosisRun, diagnosisRun.status, viewPhase]);
   const riskEvents = useMemo(() => deriveRiskEvents(telemetry, perception), [telemetry, perception]);
   const completedRiskEvents = useMemo(
     () => riskEvents.filter((event) => event.endTime <= currentTime + 0.05),
@@ -1171,12 +1235,10 @@ function App() {
 
   const handleSceneSelection = useCallback((nextSceneId: string, nextSceneEntry?: SceneManifestEntry) => {
     if (nextSceneId === selectedSceneIdRef.current) return;
+    if (diagnosisStatusRef.current !== "idle") cancelDiagnosisRun();
     selectedSceneIdRef.current = nextSceneId;
     sceneGenerationRef.current += 1;
     diagnosisRequestGenerationRef.current += 1;
-    diagnosisJobAbortRef.current?.abort();
-    diagnosisJobAbortRef.current = null;
-    diagnosisJobOwnerRef.current = null;
     const pendingDiagnosis = pendingDiagnosisRef.current;
     pendingDiagnosisRef.current = null;
     const diagnosisSocket = socketRef.current;
@@ -1194,7 +1256,8 @@ function App() {
     sceneLoadAbortRef.current = null;
     lidarPlaybackAbortRef.current?.abort();
     lidarPlaybackAbortRef.current = null;
-    lidarRequestGateRef.current.reset();
+    lidarSequencerRef.current.reset();
+    renderedLidarFrameRef.current = null;
     lidarCache.clear();
 
     clearMapCanvasBitmap(mapCanvasRef.current);
@@ -1202,12 +1265,8 @@ function App() {
     setSceneLoading(true);
     setDiagnosis(null);
     setDiagnosing(false);
-    setDiagnosisReport(null);
-    setReportRunning(false);
-    setReportStage("queued");
-    setReportProgress(0);
-    setReportError(null);
     setError(null);
+    publishedPlaybackTimeRef.current = 0;
     setCurrentTime(0);
     setOwnedLidarIndex(null);
     setCurrentPointCloud(null);
@@ -1217,7 +1276,7 @@ function App() {
     const nextScene = nextSceneEntry ?? scenesRef.current.find((scene) => scene.id === nextSceneId);
     setLidarStatus(nextScene && !resolveLidarSource(nextScene) ? "unavailable" : "loading");
     setSelectedSceneId(nextSceneId);
-  }, [lidarCache, resetScenePresentation]);
+  }, [cancelDiagnosisRun, lidarCache, resetScenePresentation]);
 
   const connectSocket = useCallback(() => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
@@ -1325,11 +1384,13 @@ function App() {
     lidarPlaybackAbortRef.current?.abort();
     const lidarPlaybackController = new AbortController();
     lidarPlaybackAbortRef.current = lidarPlaybackController;
-    lidarRequestGateRef.current.reset();
+    lidarSequencerRef.current.reset();
+    renderedLidarFrameRef.current = null;
     const lidarSource = resolveLidarSource(selectedScene);
     setSceneLoading(true);
     setDiagnosis(null);
     setError(null);
+    publishedPlaybackTimeRef.current = 0;
     setCurrentTime(0);
     lidarCache.clear();
     setOwnedLidarIndex(null);
@@ -1404,52 +1465,76 @@ function App() {
       if (lidarSource && lidarIndex && lidarIndex.frames.length === 0) setLidarStatus("error");
       return;
     }
-    const currentIndex = lidarIndex.frames.indexOf(candidateLidarFrame);
+    const currentIndex = findLidarFrameIndexAtOrBefore(lidarIndex, currentTime);
     if (currentIndex < 0) return;
-    const ticket = lidarRequestGateRef.current.issue();
-    const frames = lidarIndex.frames.slice(Math.max(0, currentIndex - 2), currentIndex + 1);
-    // Keep the last successful point cloud visible while the next keyframe is fetched.
-    // Switching to the loading branch here used to unmount the WebGL canvas every 100 ms.
+    const sequencer = lidarSequencerRef.current;
+    sequencer.setTarget(currentIndex);
+    const nextIndex = sequencer.next();
+    if (nextIndex === null) return;
+
+    const nextFrame = lidarIndex.frames[nextIndex];
+    const preloadFrames = new Map(
+      [
+        ...selectLidarFrameWindow(
+          lidarIndex,
+          nextIndex,
+          LIDAR_HISTORY_FRAME_COUNT,
+          LIDAR_PREFETCH_FRAME_COUNT,
+        ),
+        ...selectLidarFrameWindow(lidarIndex, currentIndex, 0, LIDAR_PREFETCH_FRAME_COUNT),
+      ].map((frame) => [frame.file, frame]),
+    );
+    const historyFrames = selectLidarFrameWindow(lidarIndex, nextIndex, LIDAR_HISTORY_FRAME_COUNT, 0).slice(0, -1);
+
     if (!currentPointCloud) {
       setLidarStatus("loading");
     }
-    Promise.allSettled(frames.map((frame) => lidarCache.load(resolveLidarFrameUrl(lidarSource, frame.file), playbackSignal)))
-      .then((results) => {
-        if (playbackSignal.aborted) return;
-        const currentCommit = resolveLidarRequestCommit(lidarRequestGateRef.current, ticket, results.at(-1));
-        if (currentCommit.status === "stale") return;
-        if (currentCommit.status === "rejected") {
-          const loadError = currentCommit.reason;
-          const errorMessage = loadError instanceof Error ? loadError.message : String(loadError ?? "unknown error");
-          setLidarStatus("error");
-          setLidarError(errorMessage);
-          return;
-        }
 
-        setCurrentPointCloud(currentCommit.value);
-        const currentPose = findNearestFrame(perception, candidateLidarFrame.time)?.ego;
-        const history = results.slice(0, -1).flatMap((result, index): LidarHistoryCloud[] => {
-          if (result.status === "rejected") return [];
-          const source = frames[index];
-          const sourcePose = findNearestFrame(perception, source.time)?.ego;
-          if (!currentPose || !sourcePose) return [];
-          const dx = sourcePose.x - currentPose.x;
-          const dy = sourcePose.y - currentPose.y;
-          const cos = Math.cos(currentPose.yaw);
-          const sin = Math.sin(currentPose.yaw);
-          return [{
-            points: result.value,
-            forward: cos * dx + sin * dy,
-            left: -sin * dx + cos * dy,
-            headingDelta: sourcePose.yaw - currentPose.yaw,
-          }];
-        });
-        setLidarHistory(history);
-        setRenderedLidarFrame(candidateLidarFrame);
+    void Promise.allSettled(
+      [...preloadFrames.values()].map((frame) => lidarCache.load(resolveLidarFrameUrl(lidarSource, frame.file), playbackSignal)),
+    );
+
+    void lidarCache.load(resolveLidarFrameUrl(lidarSource, nextFrame.file), playbackSignal).then(
+      (pointCloud) => {
+        if (playbackSignal.aborted || sequencer.next() !== nextIndex) return;
+        sequencer.markPresented(nextIndex);
+        renderedLidarFrameRef.current = nextFrame;
+        setCurrentPointCloud(pointCloud);
+        setRenderedLidarFrame(nextFrame);
         setLidarStatus("ready");
         setLidarError(null);
-      });
-  }, [candidateLidarKey, lidarCache, ownedLidarIndex, perception, selectedScene.id, selectedScene.lidarIndexFile]);
+
+        void Promise.allSettled(
+          historyFrames.map((frame) => lidarCache.load(resolveLidarFrameUrl(lidarSource, frame.file), playbackSignal)),
+        ).then((results) => {
+          if (playbackSignal.aborted || renderedLidarFrameRef.current !== nextFrame) return;
+          const currentPose = findNearestFrame(perception, nextFrame.time)?.ego;
+          const history = results.flatMap((result, index): LidarHistoryCloud[] => {
+            if (result.status === "rejected") return [];
+            const source = historyFrames[index];
+            const sourcePose = findNearestFrame(perception, source.time)?.ego;
+            if (!currentPose || !sourcePose) return [];
+            const dx = sourcePose.x - currentPose.x;
+            const dy = sourcePose.y - currentPose.y;
+            const cos = Math.cos(currentPose.yaw);
+            const sin = Math.sin(currentPose.yaw);
+            return [{
+              points: result.value,
+              forward: cos * dx + sin * dy,
+              left: -sin * dx + cos * dy,
+              headingDelta: sourcePose.yaw - currentPose.yaw,
+            }];
+          });
+          setLidarHistory(history);
+        });
+      },
+      (reason: unknown) => {
+        if (playbackSignal.aborted || sequencer.next() !== nextIndex) return;
+        setLidarStatus("error");
+        setLidarError(reason instanceof Error ? reason.message : String(reason));
+      },
+    );
+  }, [candidateLidarFrame, candidateLidarKey, currentPointCloud, currentTime, lidarCache, ownedLidarIndex, perception, renderedLidarKey, selectedScene.id, selectedScene.lidarIndexFile]);
 
   useEffect(() => {
     let active = true;
@@ -1492,9 +1577,6 @@ function App() {
         reconnectTimerRef.current = null;
       }
       pendingDiagnosisRef.current = null;
-      diagnosisJobAbortRef.current?.abort();
-      diagnosisJobAbortRef.current = null;
-      diagnosisJobOwnerRef.current = null;
       const socket = socketRef.current;
       socketRef.current = null;
       if (socket) {
@@ -1507,7 +1589,14 @@ function App() {
 
   useEffect(() => {
     const tick = () => {
-      setCurrentTime(videoRef.current?.currentTime ?? 0);
+      const time = videoRef.current?.currentTime ?? 0;
+      if (
+        Number.isFinite(time)
+        && (Math.abs(time - publishedPlaybackTimeRef.current) >= 1 / 30 || time < publishedPlaybackTimeRef.current)
+      ) {
+        publishedPlaybackTimeRef.current = time;
+        setCurrentTime(time);
+      }
       animationFrameRef.current = window.requestAnimationFrame(tick);
     };
     animationFrameRef.current = window.requestAnimationFrame(tick);
@@ -1560,77 +1649,6 @@ function App() {
     }
   };
 
-  const handleGenerateReport = () => {
-    diagnosisJobAbortRef.current?.abort();
-    const controller = new AbortController();
-    diagnosisJobAbortRef.current = controller;
-    diagnosisJobOwnerRef.current = null;
-    const sceneGeneration = sceneGenerationRef.current;
-    const sceneKey = selectedScene.id;
-    let capturedOwner: DiagnosisJobOwner | null = null;
-    const ownsCreation = () => (
-      !controller.signal.aborted
-      && diagnosisJobAbortRef.current === controller
-      && sceneGenerationRef.current === sceneGeneration
-      && selectedSceneIdRef.current === sceneKey
-    );
-    const ownsJob = (owner: DiagnosisJobOwner, responseJobId: string) => (
-      diagnosisJobOwnerRef.current === owner
-      && shouldAcceptDiagnosisJobUpdate(
-        owner,
-        sceneGenerationRef.current,
-        selectedSceneIdRef.current,
-        responseJobId,
-      )
-    );
-
-    setDiagnosisReport(null);
-    setReportRunning(true);
-    setReportStage("queued");
-    setReportProgress(0);
-    setReportError(null);
-
-    void createDiagnosisJob(API_URL, sceneKey, dataVersion, controller.signal)
-      .then(async (created) => {
-        if (!ownsCreation()) return null;
-        const owner = { sceneGeneration, sceneKey, jobId: created.jobId };
-        capturedOwner = owner;
-        diagnosisJobOwnerRef.current = owner;
-        setReportStage(created.stage);
-        setReportProgress(created.percent);
-        if (created.stage === "failed") throw new Error(created.error ?? "诊断任务失败");
-        if (created.stage === "complete" && created.report) return created.report;
-
-        return pollDiagnosisJob(API_URL, created.jobId, controller.signal, (snapshot) => {
-          if (!ownsJob(owner, snapshot.jobId)) return;
-          setReportStage(snapshot.stage);
-          setReportProgress((current) => advanceDiagnosisProgress(current, snapshot.percent));
-        });
-      })
-      .then((completedReport) => {
-        if (
-          !completedReport
-          || !capturedOwner
-          || !ownsJob(capturedOwner, capturedOwner.jobId)
-        ) return;
-        setDiagnosisReport(completedReport);
-        setReportStage("complete");
-        setReportProgress(100);
-      })
-      .catch((reportFailure: unknown) => {
-        if (reportFailure instanceof DOMException && reportFailure.name === "AbortError") return;
-        if (!ownsCreation()) return;
-        setReportStage("failed");
-        setReportError(reportFailure instanceof Error ? reportFailure.message : String(reportFailure));
-      })
-      .finally(() => {
-        if (!ownsCreation()) return;
-        setReportRunning(false);
-        diagnosisJobOwnerRef.current = null;
-        diagnosisJobAbortRef.current = null;
-      });
-  };
-
   const handleSeekRiskEvent = (time: number, event?: RiskEvent) => {
     const replayTime = resolveReplayTime(event ?? { seekTime: time });
     const video = videoRef.current;
@@ -1638,20 +1656,20 @@ function App() {
       video.currentTime = replayTime;
       void video.play().catch(() => undefined);
     }
+    publishedPlaybackTimeRef.current = replayTime;
     setCurrentTime(replayTime);
   };
 
   const demoParam = new URLSearchParams(window.location.search).get("demo");
   const positioningOrbitDemo = demoParam === "positioning-orbit";
   const contextCardsDemo = demoParam === "context-cards";
+  const closingTypeDemo = demoParam === "closing-type";
   const lidarSlot = (
-    <div className="cockpit-lidar-slot">
-      <div className="panel-title">
-        <Layers3 size={18} aria-hidden="true" />
-        <span>激光雷达三维点云</span>
-        <strong>高危 {highRiskObjects} / 中危 {mediumRiskObjects}</strong>
-      </div>
-      <LidarBev
+      <div className="cockpit-lidar-slot">
+        <div className="panel-title">
+          <span>激光雷达点云</span>
+        </div>
+      <LazyLidarBev
         sceneId={selectedScene.id}
         pointCloud={currentPointCloud}
         frame={currentPerception}
@@ -1659,21 +1677,13 @@ function App() {
         status={lidarDisplayState.tone}
         errorMessage={lidarError}
       />
-      <div className="lidar-metadata" aria-label="LiDAR 数据状态">
-        <span>源 {resolveLidarSource(selectedScene) ? "nuScenes 激光雷达" : "仅相机"}</span>
-        <span>点 {renderedLidarFrame?.pointCount.toLocaleString() ?? "--"}</span>
-        <span>关键帧 {renderedLidarFrame ? `${formatNumber(renderedLidarFrame.time, 2)}s` : "--"}</span>
-        <span className={`lidar-status lidar-status-${lidarDisplayState.tone}`}>{lidarDisplayState.text}</span>
-      </div>
     </div>
   );
   const mapSlot = (
-    <div className="cockpit-map-slot">
-      <div className="panel-title">
-        <Map size={18} aria-hidden="true" />
-        <span>地图与轨迹</span>
-        <strong>{currentPerception ? `${formatNumber(currentPerception.ego.latitude, 5)}, ${formatNumber(currentPerception.ego.longitude, 5)}` : "--"}</strong>
-      </div>
+      <div className="cockpit-map-slot">
+        <div className="panel-title">
+          <span>地图与轨迹</span>
+        </div>
       <div className="canvas-stage map-stage">
         <canvas
           ref={mapCanvasRef}
@@ -1686,11 +1696,10 @@ function App() {
           aria-label="可缩放和平移的局部地图"
         />
         <div className="map-controls" aria-label="地图控制">
-          <button type="button" onClick={() => updateMapZoom(1.2)} title="放大地图" aria-label="放大地图"><Plus size={16} aria-hidden="true" /></button>
-          <button type="button" onClick={() => updateMapZoom(1 / 1.2)} title="缩小地图" aria-label="缩小地图"><Minus size={16} aria-hidden="true" /></button>
-          <button type="button" onClick={resetMapViewport} title="回到自车当前位置" aria-label="回到自车当前位置"><LocateFixed size={16} aria-hidden="true" /></button>
+          <button type="button" onClick={() => updateMapZoom(1.2)} title="放大地图" aria-label="放大地图"><Plus size={8} aria-hidden="true" /></button>
+          <button type="button" onClick={() => updateMapZoom(1 / 1.2)} title="缩小地图" aria-label="缩小地图"><Minus size={8} aria-hidden="true" /></button>
+          <button type="button" onClick={resetMapViewport} title="回到自车当前位置" aria-label="回到自车当前位置"><LocateFixed size={8} aria-hidden="true" /></button>
         </div>
-        <div className="map-interaction-hint"><Move size={13} aria-hidden="true" /> 拖拽平移 · 滚轮缩放</div>
       </div>
     </div>
   );
@@ -1706,53 +1715,11 @@ function App() {
     </div>
   );
   const diagnosisSlot = (
-    <aside className="diagnosis-panel">
-      <div className="panel-title">
-        <BrainCircuit size={18} aria-hidden="true" />
-        <span>AI 全域诊断</span>
-        <strong className={`status-dot status-${connectionStatus}`}>{statusText[connectionStatus]}</strong>
-      </div>
-      <div className="cockpit-diagnosis-progress" aria-label="诊断进度">
-        <span>全场景报告</span>
-        <strong>{reportRunning ? `${reportProgress}%` : diagnosisReport ? "已完成" : reportError ? "失败" : "等待启动"}</strong>
-        <i style={{ width: `${reportProgress}%` }} />
-      </div>
-      <div className="cockpit-diagnosis__buttons">
-        <button
-          className="diagnose-button diagnose-button--secondary"
-          type="button"
-          onClick={handleDiagnose}
-          disabled={diagnosing || connectionStatus !== "connected" || !currentFrame}
-          title="通过 WebSocket 诊断当前视频帧"
-          aria-label="全域诊断"
-        >
-          {diagnosing ? <LoaderCircle className="spin" size={17} /> : <BrainCircuit size={17} />}
-          {diagnosing ? "当前帧诊断中" : "当前帧诊断"}
-        </button>
-        <button
-          className="diagnose-button"
-          type="button"
-          onClick={handleGenerateReport}
-          disabled={reportRunning || sceneLoading}
-        >
-          {reportRunning ? <LoaderCircle className="spin" size={17} /> : <FileSearch size={17} />}
-          {reportRunning ? "报告生成中" : "生成全场景报告"}
-        </button>
-      </div>
-      {error && <div className="message error-message"><AlertTriangle size={18} aria-hidden="true" /><span>{error}</span></div>}
-      {reportError && <div className="message error-message"><AlertTriangle size={18} aria-hidden="true" /><span>{reportError}</span></div>}
-      <span className="cockpit-diagnosis__stage" aria-live="polite">任务阶段：{diagnosisStageText[reportStage]}</span>
-      <div className="result-panel">
-        <div className="result-title"><BrainCircuit size={18} aria-hidden="true" /><span>诊断分析</span></div>
-        <p>{diagnosis?.thought ?? "点击全域诊断后，这里会展示后端返回的风险分析。"}</p>
-      </div>
-      <div className="result-panel conclusion-panel">
-        <div className="result-title"><ShieldCheck size={18} aria-hidden="true" /><span>最终结论</span></div>
-        <p>{diagnosis?.conclusion ?? "等待当前帧诊断结果。"}</p>
-      </div>
+    <aside className="diagnosis-panel diagnosis-panel--compact">
+      <DiagnosisProgress state={diagnosisRun} onStart={startDiagnosisRun} onRetry={startDiagnosisRun} onCancel={cancelDiagnosisRun} />
     </aside>
   );
-  const siteView = viewPhase === "cockpit" ? null : positioningOrbitDemo ? <PositioningOrbitDemo /> : contextCardsDemo ? <ContextCardsDemo /> : <ProjectSite
+  const siteView = viewPhase === "cockpit" ? null : positioningOrbitDemo ? <PositioningOrbitDemo /> : contextCardsDemo ? <ContextCardsDemo /> : closingTypeDemo ? <ClosingTypographyDemo /> : <ProjectSite
       onOpenDemo={handleOpenDemo}
       onTerrainPresetChange={setTerrainPreset}
       playOpening={!showcaseOpeningPlayedRef.current}
@@ -1790,11 +1757,16 @@ function App() {
       mapSlot={mapSlot}
       historySlot={historySlot}
       diagnosisSlot={diagnosisSlot}
-      report={diagnosisReport}
-      reportExpanded={diagnosisReport !== null}
+      report={diagnosisRun.status === "complete" ? diagnosisRun.report : null}
+      motionReady={viewPhase !== "entering"}
+      selectedEvidenceTime={diagnosisRun.report?.evidence.index.find(
+        (evidence) => evidence.id === diagnosisRun.selectedEvidenceId,
+      )?.start_time ?? null}
       videoRef={videoRef}
       onSceneSelect={handleSceneSelection}
       onSeekReportEvidence={handleSeekRiskEvent}
+      onReturnToDiagnosis={() => undefined}
+      onRerunDiagnosis={rerunDiagnosisRun}
       onScreenChange={setCockpitScreen}
       onReturnSite={handleReturnSite}
       onContact={() => {

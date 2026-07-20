@@ -237,6 +237,12 @@ describe("TerrainBackdrop", () => {
     expect(requestAnimationFrame).not.toHaveBeenCalled();
   });
 
+  it("renders a static overlay once without scheduling a loop", () => {
+    render(createElement(TerrainBackdrop, { view: "showcase", preset: "closing", risk: "unknown", animated: false }));
+    expect(threeMocks.onscreenRender).toHaveBeenCalledTimes(1);
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
+  });
+
   it("does not rewind a snapped target when reduced motion is disabled", () => {
     reducedMotion = true;
     const view = render(createElement(TerrainBackdrop, { view: "showcase", preset: "positioning", risk: "unknown" }));

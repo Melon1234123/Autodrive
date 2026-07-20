@@ -23,12 +23,17 @@ def main() -> int:
         catalog = SceneCatalog(public_root, public_root / "scenes.json")
         summary = {}
         for scene_key in TEN_SCENE_KEYS:
-            report = run_scene_diagnosis(catalog, scene_key, "golden-v1")
+            report = run_scene_diagnosis(catalog, scene_key, "golden-v2")
             summary[scene_key] = {
-                "scene_name": report.scene_name,
-                "overall": report.scores.overall,
-                "event_count": len(report.timeline),
-                "historical_event_count": len(report.historical_risk_events),
+                "scene_name": report.meta.scene_name,
+                "protected_facts_fingerprint": (
+                    report.meta.protected_facts_fingerprint
+                ),
+                "generation_mode": report.meta.generation.mode,
+                "overall": report.analysis.risk_profile.overall,
+                "episode_count": len(report.evidence.timeline),
+                "evidence_count": len(report.evidence.index),
+                "limitations": report.support.limitations,
             }
     output = Path(__file__).parent / "golden" / "summary.json"
     output.parent.mkdir(parents=True, exist_ok=True)

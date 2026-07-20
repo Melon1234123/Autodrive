@@ -52,17 +52,20 @@ def high_risk_context(scene_key="internal-key", scene_name="城市路口侧向�
 
 
 def test_causal_chain_separates_observation_from_inference():
-    chain = build_causal_chains(high_risk_context())[0]
+    chains = build_causal_chains(high_risk_context())
+    chain = chains[0]
+    assert [item.id for item in chains] == ["causal-0001", "causal-0002"]
     assert chain.observation.startswith("在 12.4 秒")
     assert chain.mechanism.startswith("推断：")
     assert chain.possible_impact.startswith("可能")
     assert chain.evidence_ids == ["ev-0002"]
-    perception_chain = build_causal_chains(high_risk_context())[1]
+    perception_chain = chains[1]
     assert perception_chain.evidence_ids == ["ev-0001"]
 
 
 def test_causal_chain_has_a_baseline_when_no_episode_exists():
     context = high_risk_context().model_copy(update={"episodes": []})
     chain = build_causal_chains(context)[0]
+    assert chain.id == "causal-0001"
     assert chain.observation
     assert chain.confidence == 0.8

@@ -85,7 +85,9 @@ else
 #!/bin/zsh
 cd ${(qqq)BACKEND_DIR}
 source .venv/bin/activate
-uvicorn server:app --host 0.0.0.0 --port $BACKEND_PORT --reload 2>&1 | tee ${(qqq)RUN_DIR}/backend.log
+uvicorn server:app --host 0.0.0.0 --port $BACKEND_PORT --reload \
+  --reload-dir ${(qqq)BACKEND_DIR} \
+  --reload-dir ${(qqq)PROJECT_DIR}/harness/src 2>&1 | tee ${(qqq)RUN_DIR}/backend.log
 EOF
   chmod +x "$RUN_DIR/start-backend.command"
   open -a Terminal "$RUN_DIR/start-backend.command"

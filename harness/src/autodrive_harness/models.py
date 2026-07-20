@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from typing import Any, Dict, List, Literal, Optional
 
@@ -202,13 +201,8 @@ class Finding(StrictModel):
     evidence_ids: List[str]
 
 
-class AnalysisSection(StrictModel):
-    summary: str
-    metrics: Dict[str, Any] = Field(default_factory=dict)
-    evidence_ids: List[str]
-
-
 class CausalChain(StrictModel):
+    id: str = Field(pattern=r"^causal-\d{4}$")
     observation: str
     mechanism: str
     possible_impact: str
@@ -230,39 +224,10 @@ class RegressionRecommendation(StrictModel):
     rationale: str
 
 
-class DiagnosisReport(StrictModel):
-    schema_version: Literal["1.0"] = "1.0"
-    scene_name: str
-    data_version: str
-    generation_mode: Literal["local-harness", "model-enhanced"]
-    executive_summary: str
-    scene_overview: Dict[str, Any]
-    data_quality: List[DataQualityFinding]
-    scores: RiskScores
-    key_findings: List[Finding]
-    timeline: List[RiskEpisode]
-    historical_risk_events: List[RiskEpisode]
-    perception_analysis: AnalysisSection
-    motion_control_analysis: AnalysisSection
-    trajectory_analysis: AnalysisSection
-    causal_chains: List[CausalChain]
-    recommendations: List[Recommendation]
-    regression_tests: List[RegressionRecommendation]
-    evidence_index: List[EvidenceRef]
-    limitations: List[str]
-
-    @model_validator(mode="after")
-    def forbids_raw_scene_ids(self) -> "DiagnosisReport":
-        serialized = json.dumps(self.model_dump(mode="json"), ensure_ascii=False)
-        if RAW_SCENE_ID.search(serialized):
-            raise ValueError("diagnosis reports must not expose raw scene ids")
-        return self
-
-
 class DiagnosisProgress(StrictModel):
     stage: Literal[
-        "validation", "timeline", "features", "events", "causality", "report",
-        "enhancement", "complete",
+        "validation", "alignment", "features", "events", "evidence", "narrative",
+        "report", "complete",
     ]
     percent: int = Field(ge=0, le=100)
 

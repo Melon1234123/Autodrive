@@ -27,6 +27,7 @@ def build_causal_chains(
             if item.source in {"perception", "telemetry"}
         ][:1]
         return [CausalChain(
+            id="causal-0001",
             observation="跨模态事件挖掘与因果链不可评估。",
             mechanism="未执行：跨模态数据不满足时间对齐条件。",
             possible_impact="恢复缺失数据并重新运行后，才能评估事件与因果关系。",
@@ -48,6 +49,7 @@ def build_causal_chains(
         perception_ids = source_ids(episode.evidence_ids, "perception")
         if episode.control_conflict and telemetry_ids:
             chains.append(CausalChain(
+                id=f"causal-{len(chains) + 1:04d}",
                 observation=f"在 {_time(episode.peak_time)} 秒检测到制动与油门输入重叠。",
                 mechanism="推断：控制意图冲突会压缩纵向安全裕度。",
                 possible_impact="可能导致减速响应不一致。",
@@ -62,6 +64,7 @@ def build_causal_chains(
         )
         if has_risk_object and perception_ids:
             chains.append(CausalChain(
+                id=f"causal-{len(chains) + 1:04d}",
                 observation=(
                     f"在 {_time(episode.peak_time)} 秒记录到持续"
                     f"{_risk_label(episode.risk)}风险目标。"
@@ -82,6 +85,7 @@ def build_causal_chains(
     elif evidence_index is None and not context.episodes:
         baseline_ids = ["ev-0001"]
     return [CausalChain(
+        id="causal-0001",
         observation="在可用时间范围内未形成持续风险事件。",
         mechanism="推断：当前规则阈值下没有足够证据支持具体因果机制。",
         possible_impact="可能存在未被现有传感模态覆盖的低强度风险。",

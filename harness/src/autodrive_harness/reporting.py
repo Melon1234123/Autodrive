@@ -1,25 +1,23 @@
 from __future__ import annotations
 
-import hashlib
-import json
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, List, Tuple
 
-from .catalog import APPROVED_SCENE_NAMES
 from .causality import build_causal_chains
 from .models import (
-    AnalysisSection,
     CausalChain,
     DataQualityFinding,
     DiagnosisContext,
-    DiagnosisReport,
+    DiagnosisProgress,
     EvidenceRef,
     Finding,
-    RAW_SCENE_ID,
     Recommendation,
     RegressionRecommendation,
     RiskEpisode,
     TimelineSample,
 )
+
+if TYPE_CHECKING:
+    from .fact_bundle import FactBundle
 
 
 STANDARD_LIMITATIONS = [
@@ -28,19 +26,11 @@ STANDARD_LIMITATIONS = [
     "本地规则分析仅用于场景筛查与回归建议，不代替道路安全认证。",
 ]
 
+ProgressCallback = Callable[[DiagnosisProgress], None]
+
 
 def _risk_label(value: str) -> str:
     return {"high": "高", "medium": "中"}[value]
-
-
-def protected_fingerprint(report: DiagnosisReport) -> str:
-    encoded = json.dumps(
-        report.model_dump(mode="json"),
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _samples_in_window(
@@ -81,14 +71,9 @@ def _evidence_for_window(
 ) -> List[str]:
     evidence_ids: List[str] = []
     if any(sample.perception.value.imageFile for sample in samples):
-        image_file = next(
-            sample.perception.value.imageFile
-            for sample in samples
-            if sample.perception.value.imageFile
-        )
         evidence_ids.append(_append_evidence(
             evidence, "camera", "real", start_time, end_time,
-            f"{label}时间窗内存在真实相机图像样本 {image_file}。",
+            f"{label}时间窗内存在真实相机图像样本。",
         ))
     if any(sample.perception.value.objects for sample in samples):
         evidence_ids.append(_append_evidence(
@@ -159,14 +144,10 @@ def _raw_modality_evidence(context: DiagnosisContext) -> List[EvidenceRef]:
     if bundle.perception:
         start_time = min(row.time for row in bundle.perception)
         end_time = max(row.time for row in bundle.perception)
-        image_file = next(
-            (row.imageFile for row in bundle.perception if row.imageFile),
-            None,
-        )
-        if image_file:
+        if any(row.imageFile for row in bundle.perception):
             _append_evidence(
                 evidence, "camera", "real", start_time, end_time,
-                f"原始感知序列存在真实相机图像样本 {image_file}。",
+                "原始感知时间窗内存在真实相机图像样本。",
             )
         if any(row.objects for row in bundle.perception):
             _append_evidence(
@@ -367,193 +348,19 @@ def _limitations(available_sources: set) -> List[str]:
     return limitations
 
 
-def _unavailable_section(source: str, metric_names: List[str]) -> AnalysisSection:
-    labels = {
-        "perception": "感知目标",
-        "telemetry": "运动与控制",
-        "trajectory": "轨迹偏移",
-    }
-    return AnalysisSection(
-        summary=f"事件窗内缺少可用证据，{labels[source]}不可评估。",
-        metrics={name: None for name in metric_names},
-        evidence_ids=[],
-    )
-
-
-def _referenced_evidence_ids(report: DiagnosisReport) -> List[str]:
-    references: List[str] = []
-    for episode in report.timeline:
-        references.extend(episode.evidence_ids)
-    for episode in report.historical_risk_events:
-        references.extend(episode.evidence_ids)
-    for finding in report.key_findings:
-        references.extend(finding.evidence_ids)
-    for section in (
-        report.perception_analysis,
-        report.motion_control_analysis,
-        report.trajectory_analysis,
-    ):
-        references.extend(section.evidence_ids)
-    for chain in report.causal_chains:
-        references.extend(chain.evidence_ids)
-    for recommendation in report.recommendations:
-        references.extend(recommendation.evidence_ids)
-    return references
-
-
-def validate_report_contract(report: DiagnosisReport) -> DiagnosisReport:
-    if report.scene_name not in set(APPROVED_SCENE_NAMES.values()):
-        raise ValueError("report scene_name is not an approved Chinese scene name")
-    if RAW_SCENE_ID.search(report.model_dump_json()):
-        raise ValueError("diagnosis reports must not expose raw scene ids")
-
-    finding_ids = [item.id for item in report.key_findings]
-    recommendation_ids = [item.id for item in report.recommendations]
-    if len(finding_ids) != len(set(finding_ids)):
-        raise ValueError("finding ids must be unique")
-    if len(recommendation_ids) != len(set(recommendation_ids)):
-        raise ValueError("recommendation ids must be unique")
-
-    evidence = {item.id: item for item in report.evidence_index}
-    if len(evidence) != len(report.evidence_index):
-        raise ValueError("evidence ids must be unique")
-    references = set(_referenced_evidence_ids(report))
-    dangling = references - set(evidence)
-    if dangling:
-        raise ValueError(f"dangling evidence ids: {sorted(dangling)}")
-    orphaned = set(evidence) - references
-    if orphaned:
-        raise ValueError(f"orphaned evidence ids: {sorted(orphaned)}")
-
-    canonical_provenance = {
-        "camera": "real",
-        "perception": "real-derived",
-        "lidar": "real",
-        "ego_pose": "real",
-        "telemetry": "estimated",
-        "trajectory": "demo-visualization",
-    }
-    for item in report.evidence_index:
-        if item.provenance != canonical_provenance[item.source]:
-            raise ValueError(f"invalid provenance for {item.source}: {item.id}")
-
-    section_contracts = [
-        (report.perception_analysis, "perception", "real-derived"),
-        (report.motion_control_analysis, "telemetry", "estimated"),
-        (report.trajectory_analysis, "trajectory", "demo-visualization"),
-    ]
-    for section, source, provenance in section_contracts:
-        if not section.evidence_ids:
-            if "不可评估" not in section.summary:
-                raise ValueError(f"{source} analysis without evidence must be unavailable")
-            if any(value is not None for value in section.metrics.values()):
-                raise ValueError(f"{source} unavailable metrics must be null")
-            continue
-        for evidence_id in section.evidence_ids:
-            item = evidence[evidence_id]
-            if item.source != source or item.provenance != provenance:
-                raise ValueError(f"{source} analysis references mismatched evidence")
-    return report
-
-
-def assemble_report(
+def build_deterministic_facts(
     context: DiagnosisContext,
-    causal_chains: Optional[List[CausalChain]] = None,
-    evidence_index: Optional[List[EvidenceRef]] = None,
-) -> DiagnosisReport:
-    if evidence_index is None:
-        context, evidence_index = prepare_report_context(context)
-    evidence_ids = [item.id for item in evidence_index]
-    available_sources = {item.source for item in evidence_index}
-    perception_ids = _evidence_ids_by_source(evidence_index, "perception")
-    telemetry_ids = _evidence_ids_by_source(evidence_index, "telemetry")
-    trajectory_ids = _evidence_ids_by_source(evidence_index, "trajectory")
-    if causal_chains is None:
-        causal_chains = build_causal_chains(context, evidence_index)
+    evidence_index: List[EvidenceRef],
+) -> FactBundle:
+    from .fact_bundle import build_fact_bundle
 
-    perception_analysis = (
-        AnalysisSection(
-            summary=(
-                f"单帧最多 {context.features.object_peak} 个目标，"
-                f"高风险目标峰值 {context.features.high_risk_object_peak} 个。"
-            ),
-            metrics={
-                "object_peak": context.features.object_peak,
-                "high_risk_object_peak": context.features.high_risk_object_peak,
-                "tracking_continuity": context.features.tracking_continuity,
-            },
-            evidence_ids=perception_ids,
-        ) if perception_ids else _unavailable_section(
-            "perception", ["object_peak", "high_risk_object_peak", "tracking_continuity"]
-        )
-    )
-    motion_analysis = (
-        AnalysisSection(
-            summary=(
-                f"峰值车速 {context.features.peak_speed:.2f} km/h，"
-                f"制动油门重叠 {context.features.control_conflict_duration:.2f} 秒。"
-            ),
-            metrics={
-                "peak_speed_kmh": context.features.peak_speed,
-                "peak_abs_accel": context.features.peak_abs_accel,
-                "peak_abs_jerk": context.features.peak_abs_jerk,
-                "control_conflict_seconds": context.features.control_conflict_duration,
-            },
-            evidence_ids=telemetry_ids,
-        ) if telemetry_ids else _unavailable_section(
-            "telemetry", ["peak_speed_kmh", "peak_abs_accel", "peak_abs_jerk",
-                          "control_conflict_seconds"]
-        )
-    )
-    trajectory_analysis = (
-        AnalysisSection(
-            summary=(
-                f"演示计划路径的峰值横向偏移为 "
-                f"{context.features.trajectory_deviation:.2f} 米。"
-            ),
-            metrics={"demo_path_lateral_deviation": context.features.trajectory_deviation},
-            evidence_ids=trajectory_ids,
-        ) if trajectory_ids else _unavailable_section(
-            "trajectory", ["demo_path_lateral_deviation"]
-        )
-    )
+    causal_chains = build_causal_chains(context, evidence_index)
+    return build_fact_bundle(context, evidence_index, causal_chains)
 
-    description = RAW_SCENE_ID.sub("内部场景", context.bundle.description)
-    high_count = sum(episode.risk == "high" for episode in context.episodes)
-    if context.scores.overall is None:
-        executive_summary = (
-            "数据未满足跨模态时间对齐条件，综合风险不可评估；"
-            "报告保留各存活模态可独立验证的指标与证据。"
-        )
-    else:
-        executive_summary = (
-            f"本地确定性分析检出 {len(context.episodes)} 个持续风险事件，"
-            f"其中 {high_count} 个为高风险；综合风险分为 {context.scores.overall}。"
-        )
-    report = DiagnosisReport(
-        scene_name=context.bundle.scene_name,
-        data_version=context.data_version,
-        generation_mode="local-harness",
-        executive_summary=executive_summary,
-        scene_overview={
-            "description": description,
-            "duration_seconds": context.features.duration,
-            "telemetry_samples": len(context.bundle.telemetry),
-            "perception_samples": len(context.bundle.perception),
-            "lidar_available": bool(context.bundle.lidar_index),
-        },
-        data_quality=_data_quality(context, available_sources),
-        scores=context.scores,
-        key_findings=_key_findings(context, evidence_ids),
-        timeline=context.episodes,
-        historical_risk_events=context.episodes,
-        perception_analysis=perception_analysis,
-        motion_control_analysis=motion_analysis,
-        trajectory_analysis=trajectory_analysis,
-        causal_chains=causal_chains,
-        recommendations=_recommendations(context, evidence_index),
-        regression_tests=_regression_tests(context),
-        evidence_index=evidence_index,
-        limitations=_limitations(available_sources),
-    )
-    return validate_report_contract(report)
+
+def report_progress(
+    emit: ProgressCallback,
+    stage: str,
+    percent: int,
+) -> None:
+    emit(DiagnosisProgress(stage=stage, percent=percent))

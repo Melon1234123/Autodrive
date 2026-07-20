@@ -1,3 +1,4 @@
+import json
 import re
 
 import pytest
@@ -22,7 +23,13 @@ TEN_SCENE_KEYS = [
 def test_golden_summary_has_exact_fixed_scene_set(golden_summary):
     assert set(golden_summary) == set(TEN_SCENE_KEYS)
     assert all(set(item) == {
-        "scene_name", "overall", "event_count", "historical_event_count",
+        "scene_name",
+        "protected_facts_fingerprint",
+        "generation_mode",
+        "overall",
+        "episode_count",
+        "evidence_count",
+        "limitations",
     }
                for item in golden_summary.values())
 
@@ -46,23 +53,35 @@ def test_input_change_cannot_pass_by_regenerating_golden(tmp_path):
 def test_every_real_scene_matches_golden_contract(
     real_catalog, golden_summary, scene_key
 ):
-    report = run_scene_diagnosis(real_catalog, scene_key, "golden-v1")
-    assert report.scene_name == golden_summary[scene_key]["scene_name"]
-    assert report.scores.overall == golden_summary[scene_key]["overall"]
-    assert len(report.timeline) == golden_summary[scene_key]["event_count"]
-    assert len(report.historical_risk_events) == (
-        golden_summary[scene_key]["historical_event_count"]
+    report = run_scene_diagnosis(real_catalog, scene_key, "golden-v2")
+    expected = golden_summary[scene_key]
+    assert report.meta.scene_name == expected["scene_name"]
+    assert (
+        report.meta.protected_facts_fingerprint
+        == expected["protected_facts_fingerprint"]
     )
-    assert report.historical_risk_events == report.timeline
-    assert report.executive_summary and report.recommendations and report.regression_tests
-    assert report.evidence_index and report.limitations
+    assert report.meta.generation.mode == expected["generation_mode"]
+    assert report.analysis.risk_profile.overall == expected["overall"]
+    assert len(report.evidence.timeline) == expected["episode_count"]
+    assert len(report.evidence.index) == expected["evidence_count"]
+    assert report.support.limitations == expected["limitations"]
+    assert report.analysis.priority_findings
+    assert report.evidence.index
     assert "scene-" not in report.model_dump_json()
-    assert all(re.fullmatch(r"ev-\d{4}", item.id) for item in report.evidence_index)
+    assert all(re.fullmatch(r"ev-\d{4}", item.id) for item in report.evidence.index)
+    assert scene_key not in json.dumps(expected, ensure_ascii=False)
+    assert not any(
+        marker in json.dumps(expected, ensure_ascii=False)
+        for marker in ("/Users/", "\\\\", ".jpg", ".bin", ".json")
+    )
 
 
 def test_live_public_root_default_matches_frozen_fixture_when_available(
     live_catalog, golden_summary
 ):
-    report = run_scene_diagnosis(live_catalog, "default", "golden-v1")
-    assert report.scores.overall == golden_summary["default"]["overall"]
-    assert len(report.timeline) == golden_summary["default"]["event_count"]
+    report = run_scene_diagnosis(live_catalog, "default", "golden-v2")
+    assert report.analysis.risk_profile.overall == golden_summary["default"]["overall"]
+    assert (
+        report.meta.protected_facts_fingerprint
+        == golden_summary["default"]["protected_facts_fingerprint"]
+    )

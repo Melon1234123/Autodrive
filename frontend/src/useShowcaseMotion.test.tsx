@@ -14,6 +14,7 @@ const motionMocks = vi.hoisted(() => {
     options: Record<string, unknown>;
     targets: unknown[];
     fromToCalls: unknown[][];
+    setCalls: unknown[][];
     chain: {
       fromTo: ReturnType<typeof vi.fn>;
       set: ReturnType<typeof vi.fn>;
@@ -24,6 +25,7 @@ const motionMocks = vi.hoisted(() => {
     timelineOptions.push(options);
     const targets: unknown[] = [];
     const fromToCalls: unknown[][] = [];
+    const setCalls: unknown[][] = [];
     const chain = {
       fromTo: vi.fn(),
       set: vi.fn(),
@@ -38,9 +40,12 @@ const motionMocks = vi.hoisted(() => {
       if (motionMocks.throwOnTween) throw new Error("tween init failed");
       return chain;
     });
-    chain.set.mockReturnValue(chain);
+    chain.set.mockImplementation((...args: unknown[]) => {
+      setCalls.push(args);
+      return chain;
+    });
     chain.restart.mockReturnValue(chain);
-    timelineInstances.push({ options, targets, fromToCalls, chain });
+    timelineInstances.push({ options, targets, fromToCalls, setCalls, chain });
     return chain;
   };
 
@@ -172,6 +177,7 @@ import ShowcaseOpening from "./ShowcaseOpening";
 import { useShowcaseMotion } from "./useShowcaseMotion";
 
 const showcaseMotionCss = readFileSync(resolve(process.cwd(), "src/showcase-motion.css"), "utf8");
+const showcaseStyles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
 
 type MutableMediaQuery = MediaQueryList & { setMatches: (matches: boolean) => void };
 
@@ -215,9 +221,17 @@ function Harness({
   seedHiddenStyles = false,
   includeHeroMedia = true,
   enabled = true,
+  initialScrollTop = null,
+}: {
+  playOpening?: boolean;
+  onOpeningComplete?: () => void;
+  seedHiddenStyles?: boolean;
+  includeHeroMedia?: boolean;
+  enabled?: boolean;
+  initialScrollTop?: number | null;
 }) {
   const rootRef = useRef<HTMLElement | null>(null);
-  useShowcaseMotion({ rootRef, playOpening, onOpeningComplete, enabled });
+  useShowcaseMotion({ rootRef, playOpening, onOpeningComplete, enabled, initialScrollTop });
 
   return (
     <main ref={rootRef}>
@@ -262,7 +276,21 @@ function Harness({
         <section data-motion-section id="origin" />
         <section data-motion-section id="route" />
         <section data-motion-section id="product"><span id="product-detail" /></section>
-        <footer data-motion-section id="contact" />
+        <footer data-motion-section id="contact">
+          <span data-motion-line data-closing-statement="upper" data-testid="footer-line-top">
+            <span data-statement-segment="安全" />
+            <span data-statement-segment="不是" />
+            <span data-statement-segment="一句承诺" />
+          </span>
+          <span data-motion-line data-closing-statement="lower" data-testid="footer-line-bottom">
+            <span data-statement-segment="它应当被" />
+            <span data-statement-segment="证明" />
+          </span>
+          <div data-closing-brand>
+            <img src="/driveguard-mark.png" alt="" data-closing-brand-mark />
+            <img src="/closing-brand-art.png" alt="智驾卫士" data-closing-brand-art />
+          </div>
+        </footer>
       </div>
       <div id="legal-target" />
       <a href="#product">产品体系</a>
@@ -378,6 +406,16 @@ it("uses the opening preference captured on mount", () => {
   expect(motionMocks.snapStop).not.toHaveBeenCalled();
   expect(openingCompletions()).toHaveLength(0);
   expect(complete).not.toHaveBeenCalled();
+});
+
+it("seeds Lenis with a restored scroll position before Snap initializes", () => {
+  installMatchMedia({ reduced: false, desktop: true });
+  render(<Harness playOpening={false} initialScrollTop={640} />);
+
+  expect(motionMocks.lenisScrollTo).toHaveBeenCalledWith(640, { immediate: true, force: true });
+  expect(motionMocks.lenisScrollTo.mock.invocationCallOrder[0]).toBeLessThan(
+    motionMocks.snapConstruct.mock.invocationCallOrder[0],
+  );
 });
 
 it("finishes the opening fallback when the optional hero media is absent", () => {
@@ -548,23 +586,131 @@ it("replays only Hero content when returning upward", () => {
   }));
   expect(heroReturn).toBeDefined();
   expect(heroReturn?.targets).toEqual(expect.arrayContaining([
-    [root.querySelector("[data-motion-line]")],
     root.querySelector(".showcase-hero .kicker"),
     root.querySelector(".hero-copy"),
     root.querySelector(".hero-actions"),
     root.querySelector(".hero-foot"),
   ]));
+  expect(heroReturn?.targets).not.toContainEqual([root.querySelector("[data-motion-line]")]);
   expect(heroReturn?.targets).not.toContain(root.querySelector(".showcase-nav-glass"));
   expect(heroReturn?.targets).not.toContain(root.querySelector("[data-motion-opening]"));
   expect(heroReturn?.targets).not.toContain(root.querySelector("[data-motion-opening-panel]"));
   expect(heroReturn?.targets).not.toContain(root.querySelector("[data-motion-hero-media]"));
-  expect(heroReturn?.fromToCalls).toHaveLength(5);
+  expect(heroReturn?.fromToCalls).toHaveLength(4);
   for (const call of heroReturn?.fromToCalls ?? []) {
     expect(call[2]).toEqual(expect.objectContaining({ immediateRender: false }));
   }
 
   heroTrigger.onEnterBack?.();
   expect(heroReturn?.chain.restart).toHaveBeenCalledTimes(1);
+});
+
+it("reveals small text upward and restores ordered line tweens", () => {
+  installMatchMedia({ reduced: false, desktop: true });
+  const view = render(<Harness playOpening={false} />);
+  const root = view.container.querySelector("main") as HTMLElement;
+  const index = root.querySelector("#demo [data-motion-index]");
+  const copy = root.querySelector("#demo [data-motion-copy]");
+  const line = root.querySelector("#demo [data-motion-line]");
+  const indexCall = motionMocks.timelineFromToCalls.find(([target]) => target === index);
+  const copyCall = motionMocks.timelineFromToCalls.find(([target]) => Array.isArray(target) && target.includes(copy));
+
+  expect(indexCall?.[1]).toEqual({ autoAlpha: 0, y: 24 });
+  expect(indexCall?.[2]).toEqual(expect.objectContaining({ autoAlpha: 1, y: 0, duration: .65, ease: "power2.out" }));
+  expect(copyCall?.[1]).toEqual({ autoAlpha: 0, y: 24 });
+  expect(copyCall?.[2]).toEqual(expect.objectContaining({ autoAlpha: 1, y: 0, duration: .65, stagger: .10 }));
+  const lineCall = motionMocks.timelineFromToCalls.find(([target]) => Array.isArray(target) && target.includes(line));
+  expect(lineCall?.[1]).toEqual({ yPercent: 112, scaleY: .82 });
+  expect(lineCall?.[2]).toEqual(expect.objectContaining({ yPercent: 0, scaleY: 1, stagger: .09, ease: "power4.out" }));
+});
+
+it("reveals the closing statement in its narrative segment order", () => {
+  installMatchMedia({ reduced: false, desktop: true });
+  const view = render(<Harness playOpening={false} />);
+  const footer = view.container.querySelector("#contact")!;
+  const segments = Array.from(footer.querySelectorAll("[data-statement-segment]"));
+  const segmentCall = motionMocks.timelineFromToCalls.find(([target]) => (
+    Array.isArray(target) && target.length === segments.length && target.every((item, index) => item === segments[index])
+  ));
+
+  expect(segments.map((segment) => segment.getAttribute("data-statement-segment"))).toEqual([
+    "安全", "不是", "一句承诺", "它应当被", "证明",
+  ]);
+  expect(segmentCall).toEqual([
+    segments,
+    { autoAlpha: 0, y: 52, scale: .94 },
+    expect.objectContaining({ autoAlpha: 1, y: 0, scale: 1, duration: .68, stagger: .24, ease: "power4.out" }),
+    0,
+  ]);
+});
+
+it("writes the closing statement first frame before its scroll timeline plays", () => {
+  installMatchMedia({ reduced: false, desktop: true });
+  const view = render(<Harness playOpening={false} />);
+  const footer = view.container.querySelector("#contact")!;
+  const segments = Array.from(footer.querySelectorAll<HTMLElement>("[data-statement-segment]"));
+  const closingTimeline = motionMocks.timelineInstances.find(({ options }) => (
+    (options.scrollTrigger as { trigger?: Element } | undefined)?.trigger === footer
+  ));
+  const segmentRevealOrder = closingTimeline?.chain.fromTo.mock.invocationCallOrder.find((_, index) => (
+    Array.isArray(closingTimeline.fromToCalls[index]?.[0])
+    && (closingTimeline.fromToCalls[index]?.[0] as HTMLElement[]).every((segment, segmentIndex) => segment === segments[segmentIndex])
+  ));
+  const seedCallIndex = motionMocks.gsapSet.mock.calls.findIndex(([target, options]) => (
+    Array.isArray(target)
+    && target.every((segment, segmentIndex) => segment === segments[segmentIndex])
+    && JSON.stringify(options) === JSON.stringify({ autoAlpha: 0, y: 52, scale: .94 })
+  ));
+
+  expect(seedCallIndex).toBeGreaterThanOrEqual(0);
+  expect(motionMocks.gsapSet.mock.invocationCallOrder[seedCallIndex]).toBeLessThan(segmentRevealOrder!);
+});
+
+it("hides closing segments before their first scroll trigger", () => {
+  expect(showcaseStyles).toMatch(
+    /\.showcase\.showcase-motion-active\s+\[data-closing-statement\]\s+\[data-statement-segment\]\s*\{[^}]*opacity:\s*0;[^}]*visibility:\s*hidden;[^}]*transform:\s*translateY\(52px\)\s*scale\(\.94\);[^}]*}/,
+  );
+});
+
+it("confirms proof, gathers the statement, and unfolds the brand art", () => {
+  installMatchMedia({ reduced: false, desktop: true });
+  const view = render(<Harness playOpening={false} />);
+  const footer = view.container.querySelector("#contact")!;
+  const segments = Array.from(footer.querySelectorAll("[data-statement-segment]"));
+  const proof = footer.querySelector('[data-statement-segment="证明"]');
+  const brand = footer.querySelector("[data-closing-brand]");
+  const brandMark = footer.querySelector("[data-closing-brand-mark]");
+  const brandArt = footer.querySelector("[data-closing-brand-art]");
+  const timeline = motionMocks.timelineInstances.find(({ options }) => (
+    (options.scrollTrigger as { trigger?: Element } | undefined)?.trigger === footer
+  ));
+
+  expect(timeline?.fromToCalls).toContainEqual([
+    proof,
+    { filter: "brightness(1) saturate(1)" },
+    expect.objectContaining({ filter: "brightness(1.3) saturate(1.15)", repeat: 1, yoyo: true, clearProps: "filter" }),
+    "+=.42",
+  ]);
+  expect(timeline?.setCalls).toContainEqual([brand, { autoAlpha: 0 }, 0]);
+  expect(timeline?.fromToCalls).toContainEqual([
+    segments,
+    { x: 0, y: 0, scale: 1, autoAlpha: 1 },
+    expect.objectContaining({ scale: .035, autoAlpha: 0, duration: .86, stagger: .025, ease: "power4.in", immediateRender: false, x: expect.any(Function), y: expect.any(Function) }),
+    "+=.08",
+  ]);
+  expect(timeline?.setCalls).toContainEqual([brand, { autoAlpha: 1 }, ">+.08"]);
+  expect(timeline?.fromToCalls).toContainEqual([
+    brandMark,
+    { autoAlpha: 0, scale: .2 },
+    expect.objectContaining({ autoAlpha: .18, scale: 1, duration: .8, ease: "power2.out" }),
+    "<",
+  ]);
+  expect(timeline?.fromToCalls).toContainEqual([
+    brandArt,
+    { autoAlpha: 0, y: 24, scale: .94 },
+    expect.objectContaining({ autoAlpha: 1, y: 0, scale: 1, duration: 1.05, ease: "power3.out" }),
+    "<+.18",
+  ]);
 });
 
 it("keeps the opening cadence within the 2.8 to 3.2 second target", () => {

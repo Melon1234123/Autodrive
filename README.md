@@ -102,7 +102,7 @@ npm run test:e2e
 
 ## Deterministic local report versus model-enhanced narration
 
-无需 API Key 的本地规则会生成风险分数、事件、证据和报告事实。配置 OpenAI-compatible API 后，模型只能在受约束范围内选择展示重点和叙述风格，**不能改写确定性的分数、事件、证据或其他报告事实**。模型超时、不可达或返回无效内容时，系统保留完整本地报告并继续演示；`/health` 会反映当前模式。
+无需 API Key 的本地规则会生成风险分数、事件、证据和报告事实。配置 OpenAI-compatible API 后，模型只能在受约束范围内选择展示重点和叙述风格，**不能改写确定性的分数、事件、证据或其他报告事实**。模型超时、不可达或返回无效内容时，系统保留完整本地报告并继续演示。`/health.mode` 只表示后端是否检测到模型凭据配置，不能证明某次诊断实际使用了模型；请以诊断完成后页面报告的生成状态/降级原因（或对应诊断响应）为准。
 
 ## Data provenance and limitations
 
@@ -116,4 +116,4 @@ npm run test:e2e
 - **场景为空或视频不播放**：确认先运行了 `./scripts/build_demo_assets.sh`，并检查 `NUSCENES_DATAROOT` 和 `ffmpeg`。
 - **构建器提示缺少 Python**：先执行一次 `./dakai` 创建 `backend/.venv`，再 `./guandiao` 后重试。
 - **端口被占用**：执行 `./guandiao`，再重新运行 `./dakai`。
-- **诊断显示 fallback**：这是无 API Key、网络不可达或模型响应无效时的正常降级；检查 `backend/.env` 与 `http://localhost:8080/health`。
+- **诊断显示 fallback**：这是无 API Key、网络不可达或模型响应无效时的正常降级；先检查 `backend/.env`，再用 `http://localhost:8080/health` 确认后端是否检测到凭据配置。该端点不反映某次诊断的实际结果；重新运行诊断后，以页面报告中的生成状态/降级原因（或对应诊断响应）确认。

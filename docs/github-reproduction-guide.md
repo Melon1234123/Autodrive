@@ -160,7 +160,7 @@ NUSCENES_DATAROOT=/absolute/path/to/nuscenes-mini-5gb ./scripts/build_demo_asset
 
 ### 诊断始终是 fallback
 
-这是离线模式的正常行为。若需要模型增强，检查 `backend/.env` 中的 Key、URL 和模型名，并查看 `http://localhost:8080/health`；即使模型不可用，确定性报告仍可使用。
+这是离线模式的正常行为。若需要模型增强，检查 `backend/.env` 中的 Key、URL 和模型名，并查看 `http://localhost:8080/health` 确认后端是否检测到凭据配置；该端点的 `mode` 不是某次诊断的实际执行结果。重新运行诊断后，以页面报告中的生成状态/降级原因（或对应诊断响应）确认实际是否使用模型。即使模型不可用，确定性报告仍可使用。
 
 ### 5173 或 8080 被占用
 

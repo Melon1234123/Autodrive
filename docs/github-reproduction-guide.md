@@ -136,7 +136,7 @@ npm run test:e2e
 
 ## 7. 数据来源、演示与限制
 
-- Release 中的 [90 秒功能演示](https://github.com/Melon1234123/Autodrive/releases/tag/source-only-v1) 是观看入口，不是 clone 后的媒体依赖。
+- Release 中的 [约 111 秒（约两分钟）功能演示](https://github.com/Melon1234123/Autodrive/releases/tag/source-only-v1) 是观看入口，不是 clone 后的媒体依赖。
 - 你本机下载的 nuScenes mini 是场景原始输入；仓库脚本把 CAM_FRONT、元数据和 LiDAR 转成前端所需格式。
 - 本项目用于本地研究和可视化演示，不应作为车辆控制、安全认证或真实道路性能结论。
 

@@ -14,7 +14,7 @@
 
 ![Autodrive demo cover](docs/assets/autodrive-demo-cover.png)
 
-[Watch the 90-second release demo](https://github.com/Melon1234123/Autodrive/releases/tag/source-only-v1)
+[Watch the approximately 111-second (about two-minute) release demo](https://github.com/Melon1234123/Autodrive/releases/tag/source-only-v1)
 
 Release 视频只用于展示功能；它不是仓库依赖，也不会被 clone 到本地。
 

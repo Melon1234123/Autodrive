@@ -1,6 +1,6 @@
 # nuScenes 公开数据复现指南
 
-本项目当前已经可以用 `sample.mp4 + telemetry.json + React 前端 + Python WebSocket 后端` 跑通智驾诊断闭环。为了更接近飞书原方案，可以把本地模拟数据替换成 nuScenes mini 或完整 nuScenes scene 转换出的公开数据。
+源码优先 checkout 不附带 `sample.mp4`、`telemetry.json` 或其他生成后的场景资产。先按主 README 或 [GitHub 源码复现教程](github-reproduction-guide.md) 运行 `./scripts/build_demo_assets.sh`，在本机从 nuScenes mini 生成它们；随后 React 前端与 Python WebSocket 后端即可跑通智驾诊断闭环。为了更接近飞书原方案，也可以使用本指南中的转换命令处理 nuScenes mini 或完整 nuScenes scene 的公开数据。
 
 ## 为什么选 nuScenes
 

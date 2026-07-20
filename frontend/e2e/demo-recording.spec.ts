@@ -5,7 +5,7 @@ test.use({
   video: { mode: "on", size: { width: 1920, height: 1080 } },
 });
 
-test("records a complete product walkthrough", async ({ page }) => {
+test("records a complete product walkthrough", async ({ page }, testInfo) => {
   test.setTimeout(140_000);
 
   await page.goto("/");
@@ -31,6 +31,6 @@ test("records a complete product walkthrough", async ({ page }) => {
   await expect(page.getByText("当前使用本地可验证分析")).toBeVisible();
   await page.waitForTimeout(22_000);
 
-  await page.screenshot({ path: "../docs/assets/autodrive-demo-cover.png" });
+  await page.screenshot({ path: testInfo.outputPath("autodrive-demo-cover.png") });
   await page.waitForTimeout(12_000);
 });

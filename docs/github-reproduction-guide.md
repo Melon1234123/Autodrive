@@ -1,109 +1,71 @@
-# GitHub 下载复现教程
+# GitHub 源码复现教程
 
-这份教程面向从 GitHub clone 本仓库的用户，目标是在 macOS 上稳定复现本项目的“本地视频 + 车辆状态 + 前端页面 + Python AI 后端 + 可选 Foxglove”的智驾诊断 Demo。
+本教程从一个干净的 GitHub clone 开始，在本地生成真实 nuScenes mini 场景并运行 Autodrive。仓库是**源码优先**交付：生成后的场景媒体和数据不在提交中，Release 演示视频也不作为运行依赖。
 
-## 仓库不包含什么
+## 1. 获取源码与环境
 
-为了避免提交敏感信息和大文件，GitHub 仓库不包含：
-
-- `backend/.env`：API Key 配置文件。
-- `backend/.venv/`：Python 虚拟环境。
-- `frontend/node_modules/`、`foxglove-extension/node_modules/`：npm 依赖。
-- `frontend/public/sample.mp4`：本地生成的视频。
-- `foxglove/*.mcap`：本地生成的 Foxglove 回放文件。
-- nuScenes 原始数据集。
-
-仓库已经包含前端、后端、转换脚本、示例 telemetry/perception JSON、Foxglove 扩展源码和启动脚本。真实视频和 MCAP 需要在本地根据 nuScenes mini 生成。
-
-## 环境要求
-
-macOS 推荐环境：
-
-- Python 3.9+
-- Node.js 18+
-- npm
-- ffmpeg
-- git
-
-如果没有 ffmpeg，可以用 Homebrew 安装：
+需要 Python 3.9+、Node.js 18+、npm、git 与 ffmpeg。macOS 上可安装 ffmpeg：
 
 ```bash
 brew install ffmpeg
 ```
-
-## 下载代码
 
 ```bash
 git clone https://github.com/Melon1234123/Autodrive.git
 cd Autodrive
 ```
 
-## 配置 GLM / OpenAI-compatible API
+仓库不会包含 `backend/.env`、Python 虚拟环境、`node_modules`、nuScenes 原始数据，或下列由本机构建产生的文件：
 
-复制示例环境变量：
+- 各场景的 `sample.mp4`、`telemetry.json`、`perception.json`、`dataset-meta.json`
+- 各场景 LiDAR 索引与点云帧
+- `foxglove/*.mcap`
 
-```bash
-cp backend/.env.example backend/.env
-```
+这些忽略项的缺失是设计如此，不是 clone 失败。
 
-编辑 `backend/.env`：
+## 2. 准备 nuScenes mini
 
-```text
-OPENAI_API_KEY=你的API_KEY
-OPENAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/
-OPENAI_MODEL=glm-5.2
-```
-
-如果不配置 Key，后端不会崩溃，会自动使用本地规则 fallback；配置成功后，页面右下角会显示真实模型模式。
-
-## 准备 nuScenes mini
-
-要复现本地实景效果，需要下载 nuScenes mini，并解压成类似结构：
+下载并解压 nuScenes mini。数据根目录应类似：
 
 ```text
-$HOME/Datasets/nuscenes-mini-5gb/
+/path/to/nuscenes-mini-5gb/
   v1.0-mini/
     scene.json
     sample.json
     sample_data.json
     ego_pose.json
-    sample_annotation.json
-    category.json
-    instance.json
-    calibrated_sensor.json
-    sensor.json
   samples/
     CAM_FRONT/
   sweeps/
-    CAM_FRONT/
 ```
 
-默认启动脚本会查找：
+默认数据根目录是 `$HOME/Datasets/nuscenes-mini-5gb`。如果你的数据在其他位置，后面每次构建前都以 `NUSCENES_DATAROOT=/path/to/nuscenes-mini-5gb` 指定它。
 
-```text
-$HOME/Datasets/nuscenes-mini-5gb
-```
+## 3. 生成十个本地场景
 
-如果放在其他位置，启动时指定：
+先运行一次 `./dakai` 安装前后端依赖并创建 `backend/.venv`，再停止它。然后在**启动演示之前**执行场景构建器：
 
 ```bash
-NUSCENES_DATAROOT=/path/to/nuscenes-mini-5gb ./dakai
+./dakai
+./guandiao
+NUSCENES_DATAROOT=/path/to/nuscenes-mini-5gb ./scripts/build_demo_assets.sh
 ```
 
-## 一键启动
+若使用默认数据根目录，最后一行改为：
+
+```bash
+./scripts/build_demo_assets.sh
+```
+
+`build_demo_assets.sh` 会将十个 nuScenes 场景转换到本机：`default`（对应 `scene-0796`）以及 `scene-0061`、`scene-0103`、`scene-0553`、`scene-0655`、`scene-0757`、`scene-0916`、`scene-1077`、`scene-1094`、`scene-1100`。每个场景会有本地视频、车辆状态、感知数据和 LiDAR 回放；脚本不会改写 `scenes.json` 中已写好的中文名称和描述。
+
+构建用时取决于磁盘和 CPU。生成文件只用于你的本地运行，不应加入 Git 提交。
+
+## 4. 启动与停止
 
 ```bash
 ./dakai
 ```
-
-启动脚本会自动完成：
-
-- 创建 `backend/.venv`
-- 安装 Python 依赖
-- 如果检测到 nuScenes mini 且缺少 `sample.mp4`，自动生成真实 CAM_FRONT 视频和感知数据
-- 安装前端 npm 依赖
-- 启动 FastAPI 后端
-- 启动 Vite React 前端
 
 打开：
 
@@ -117,84 +79,95 @@ http://localhost:5173/
 http://localhost:8080/health
 ```
 
-## 验证完整链路
-
-页面加载后检查：
-
-- 左侧能播放前视视频。
-- 右侧能看到车速、刹车、油门、转向、加速度、场景状态。
-- BEV 和地图面板不是空白。
-- 地图面板车头朝上，只显示局部道路和前方轨迹。
-- 点击“全域诊断”后，后端返回风险等级、诊断分析、最终结论。
-
-如果 API 配置正确，诊断结果应显示 `真实模型` 和对应模型名；如果 API 不可达，会显示规则 fallback。
-
-## 停止服务
+停止服务：
 
 ```bash
 ./guandiao
 ```
 
-## 手动重新生成实景数据
+## 5. 可选模型增强
+
+不配置模型也可以完整运行，因为报告事实来自本地确定性规则。若要启用 OpenAI-compatible 的叙事增强：
 
 ```bash
-backend/.venv/bin/python scripts/convert_nuscenes_rich.py \
-  --dataroot "$HOME/Datasets/nuscenes-mini-5gb" \
-  --scene scene-0796 \
-  --fps 12 \
-  --render-fps 24 \
-  --max-frames 360
+cp backend/.env.example backend/.env
 ```
 
-生成内容：
+在 `backend/.env` 中填写你自己的配置，例如：
 
 ```text
-frontend/public/sample.mp4
-frontend/public/telemetry.json
-frontend/public/perception.json
-frontend/public/dataset-meta.json
+OPENAI_API_KEY=your-key
+OPENAI_BASE_URL=https://api.deepseek.com
+OPENAI_MODEL=deepseek-chat
 ```
 
-这些生成文件中的 `sample.mp4` 不提交到 GitHub。
+模型只影响受约束的说明与重点展示；风险分数、事件、证据和其他报告事实始终由本地确定性结果决定。API 不可达、没有 Key 或模型输出不合法时，后端会自动保留完整的 fallback 报告。不要把 `backend/.env` 提交到 Git。
 
-## 生成 Foxglove MCAP
+## 6. 运行测试
+
+完成首次 `./dakai` 后可运行：
 
 ```bash
-backend/.venv/bin/python scripts/export_foxglove_mcap.py
+cd frontend
+npm test -- --run
+npm run build
+
+cd ..
+backend/.venv/bin/python -m pytest harness/tests tests -q
 ```
 
-生成：
+需要浏览器端到端测试时，第一次额外安装 Chromium：
 
-```text
-foxglove/autodrive_nuscenes_mini.mcap
+```bash
+cd frontend
+npx playwright install chromium
 ```
 
-然后在 Foxglove Studio 里打开这个本地文件，并加载 `foxglove-extension` 扩展。
+E2E 会自行启动并回收端口，因此先停掉手动服务：
 
-## 常见问题
+```bash
+cd ..
+./guandiao
+cd frontend
+npm run test:e2e
+```
 
-视频区域空白：
+只有在确认已有服务来自当前工作树时，才使用 `PW_REUSE_EXISTING=1 npm run test:e2e`。
 
-- 检查 `frontend/public/sample.mp4` 是否存在。
-- 检查 `NUSCENES_DATAROOT` 是否指向 nuScenes mini 根目录。
-- 检查是否安装 ffmpeg。
+## 7. 数据来源、演示与限制
 
-诊断一直 fallback：
+- Release 中的 [90 秒功能演示](https://github.com/Melon1234123/Autodrive/releases/tag/source-only-v1) 是观看入口，不是 clone 后的媒体依赖。
+- 你本机下载的 nuScenes mini 是场景原始输入；仓库脚本把 CAM_FRONT、元数据和 LiDAR 转成前端所需格式。
+- 本项目用于本地研究和可视化演示，不应作为车辆控制、安全认证或真实道路性能结论。
 
-- 检查 `backend/.env` 是否存在。
-- 检查 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`。
-- 可访问 `http://localhost:8080/health` 查看后端识别到的模式。
+## 8. 常见问题
 
-端口被占用：
+### 构建器提示找不到数据集
 
-- 默认端口是前端 `5173`、后端 `8080`。
-- 可先执行 `./guandiao`。
+确认目录含有 `v1.0-mini/`，并以绝对路径指定：
 
-想清理本地生成文件：
+```bash
+NUSCENES_DATAROOT=/absolute/path/to/nuscenes-mini-5gb ./scripts/build_demo_assets.sh
+```
+
+### 构建器提示 Python 环境不存在
+
+先执行 `./dakai`，等待它创建 `backend/.venv`，再执行 `./guandiao` 后重试构建器。
+
+### 场景视频为空或 LiDAR 面板没有数据
+
+确认十场景构建器已无错误完成，`ffmpeg` 已安装，且不要只运行 `./dakai` 就期待 GitHub clone 中已有生成数据。
+
+### 诊断始终是 fallback
+
+这是离线模式的正常行为。若需要模型增强，检查 `backend/.env` 中的 Key、URL 和模型名，并查看 `http://localhost:8080/health`；即使模型不可用，确定性报告仍可使用。
+
+### 5173 或 8080 被占用
+
+运行：
 
 ```bash
 ./guandiao
-rm -rf .run frontend/dist frontend/node_modules foxglove-extension/node_modules backend/.venv
 ```
 
-保留 `backend/.env`、`frontend/public/sample.mp4` 和 `foxglove/autodrive_nuscenes_mini.mcap`，可以避免下次重新配置和重新生成大文件。
+再执行 `./dakai`。

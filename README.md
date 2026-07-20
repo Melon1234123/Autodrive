@@ -1,41 +1,86 @@
 # Autodrive
 
-自动驾驶本地演示与复现资料。
+一个以真实 nuScenes mini 场景为输入的自动驾驶诊断驾驶舱：前视视频、车辆状态、BEV / 地图、LiDAR 与可追溯的诊断证据在同一时间轴上同步呈现。
 
-## 文档
+## What this demonstrates
 
-- [GitHub 下载复现教程](docs/github-reproduction-guide.md)
-- [Windows 本地视频 + AI 诊断复现方案](docs/windows-local-ai-demo.md)
-- [nuScenes 公开数据复现指南](docs/nuscenes-data-guide.md)
-- [Foxglove + MCAP 实景演示指南](docs/foxglove-mcap-guide.md)
+- 十个中文命名的驾驶场景，可通过鼠标或键盘在入口、实时解析与全域诊断三屏间切换。
+- 同一播放节点驱动前视视频、感知结果、点云、地图轨迹和风险时间线，切屏不重置播放进度或倍速。
+- WebSocket 当前帧诊断与异步全场景报告。报告事实由本地确定性规则生成；可选模型只增强叙事表达。
 
-## 三屏诊断驾驶舱
+这是**源码优先**的交付：提交中刻意不包含生成后的场景视频、遥测、感知、LiDAR 帧或 MCAP 大文件。准备本地 nuScenes mini 后，下面的构建脚本会在本机补齐十个场景。
 
-从官网首屏点击“进入效果展示”后，驾驶舱按纵向三屏组织完整证据链：
+## Demo video
 
-1. **场景入口**：选择数据场景并预览真实前视视频。
-2. **实时解析**：在同一时间轴上同步视频检测框、LiDAR 点云、地图轨迹、车辆状态和历史风险。
-3. **全域诊断**：支持 WebSocket 当前帧诊断，也支持异步全场景报告。报告显示排队、特征提取、因果分析等进度，完成后自动展开；点击证据时间可回到同步视频帧。
+![Autodrive demo cover](docs/assets/autodrive-demo-cover.png)
 
-三屏共用同一个视频播放节点，滚轮或键盘切屏不会重置时间、播放状态或倍速。场景库包含十个中文场景：工区左转跟车、人车混流待转、斑马线母婴穿越、停车场行人横穿、繁忙路口公交博弈、城市路口侧向超车、停车区人车密集、夜间主干道施工、雨夜行人横穿和低照路口混行。
+[Watch the 90-second release demo](https://github.com/Melon1234123/Autodrive/releases/tag/source-only-v1)
 
-全场景报告默认由本地确定性规则生成，无需 API Key；配置可用的模型后可进入模型增强模式。模型只能返回受约束的展示风格与重点项 ID 计划，不能改写分数、事件、证据或其他报告事实。模型不可达或返回不合法数据时，会保留完整本地报告并继续演示。
+Release 视频只用于展示功能；它不是仓库依赖，也不会被 clone 到本地。
 
-## 启动与测试
+## Requirements
 
-保持原有启动方式：
+- macOS、Linux，或能够运行 zsh 脚本的环境
+- Python 3.9+、Node.js 18+、npm、git
+- `ffmpeg`：将 nuScenes CAM_FRONT 帧合成为本地视频
+- 已解压的 nuScenes mini 数据集；默认位置为 `$HOME/Datasets/nuscenes-mini-5gb`
+
+macOS 可通过 Homebrew 安装 ffmpeg：
+
+```bash
+brew install ffmpeg
+```
+
+下载源码：
+
+```bash
+git clone https://github.com/Melon1234123/Autodrive.git
+cd Autodrive
+```
+
+## Generate local scene data
+
+先准备 nuScenes mini，使数据根目录包含 `v1.0-mini/`、`samples/` 和 `sweeps/`。如果数据集不在默认位置，设置 `NUSCENES_DATAROOT` 指向其根目录。
+
+第一次先运行一次启动脚本，以创建 Python 环境；然后在**启动 Demo 前**运行十场景构建器：
+
+```bash
+./dakai
+./guandiao
+NUSCENES_DATAROOT=/path/to/nuscenes-mini ./scripts/build_demo_assets.sh
+```
+
+若使用默认位置，最后一行可直接写成：
+
+```bash
+./scripts/build_demo_assets.sh
+```
+
+构建器会依次生成 `default` 与 `scene-0061`、`scene-0103`、`scene-0553`、`scene-0655`、`scene-0757`、`scene-0916`、`scene-1077`、`scene-1094`、`scene-1100` 的本地视频、telemetry、感知数据和 LiDAR 索引/帧，并保留 `frontend/public/scenes.json` 中的中文文案。这些产物均被忽略，不应提交。
+
+详细的下载、数据目录、重建与排错说明见 [GitHub 下载复现教程](docs/github-reproduction-guide.md)。
+
+## Start and stop
 
 ```bash
 ./dakai
 ```
 
-前端地址为 `http://localhost:5173/`，后端健康检查为 `http://localhost:8080/health`。停止服务：
+打开 `http://localhost:5173/`；后端健康检查为 `http://localhost:8080/health`。停止前后端：
 
 ```bash
 ./guandiao
 ```
 
-回归测试：
+可选模型配置写入本机 `backend/.env`（不要提交）：
+
+```bash
+cp backend/.env.example backend/.env
+```
+
+没有有效 API Key 或服务不可达时，应用仍会以本地 fallback 模式运行。
+
+## Test
 
 ```bash
 cd frontend
@@ -47,101 +92,28 @@ npm run build
 cd ..
 backend/.venv/bin/python -m pytest harness/tests tests -q
 
-# E2E 默认自行启动并回收 5173/8080，先停掉手动启动的 Demo
+# E2E 默认自行启动并回收 5173/8080；先停掉手动 Demo。
 ./guandiao
 cd frontend
 npm run test:e2e
 ```
 
-fresh checkout 首次运行前需要执行 `npx playwright install chromium`。`npm run test:e2e` 默认不复用现有端口进程，而是启动并回收本次验收专用的 5173/8080 服务，确保测试当前代码。只有在确认手动服务就是当前工作树时，才可显式使用 `PW_REUSE_EXISTING=1 npm run test:e2e` 复用它们。套件验证三屏、十场景、WebSocket 当前帧诊断、异步报告和四组桌面视口；验收截图写入已忽略的 `.run/playwright/screenshots/`。
+`npm run test:e2e` 默认不复用端口进程。仅在确认手动服务正是当前工作树代码时，才使用 `PW_REUSE_EXISTING=1 npm run test:e2e`。
 
-## 快速说明
+## Deterministic local report versus model-enhanced narration
 
-当前 Demo 保持 `frontend/public/sample.mp4 + frontend/public/telemetry.json + FastAPI WebSocket`
-链路可运行，同时新增 `scripts/convert_nuscenes.py`，可把本地 nuScenes mini / scene 转换为同样的前端输入格式。
+无需 API Key 的本地规则会生成风险分数、事件、证据和报告事实。配置 OpenAI-compatible API 后，模型只能在受约束范围内选择展示重点和叙述风格，**不能改写确定性的分数、事件、证据或其他报告事实**。模型超时、不可达或返回无效内容时，系统保留完整本地报告并继续演示；`/health` 会反映当前模式。
 
-如果只需要 5GB 内的实景演示，可以使用 `scripts/convert_hf_nuscenes_qa.py`，它读取一个公开
-Hugging Face nuScenes QA mini parquet shard，生成真实 CAM_FRONT 画面的 `sample.mp4`，同时用轻量估算
-telemetry 保持前端链路可演示。
+## Data provenance and limitations
 
-当前更推荐的高完成度演示是 nuScenes mini：
+- 场景输入来自你本机持有的 nuScenes mini；视频由 CAM_FRONT 帧生成，感知、轨迹和 LiDAR 回放由仓库脚本转换/裁剪得到。
+- 仓库不随附 nuScenes 原始数据，也不承诺 Release 视频中的生成文件可被下载或复用。
+- 这是研究与交互演示，不是车辆控制系统、实时感知模型评测或安全认证结论。
+- 根目录的 `docs/` 还保留 [nuScenes 数据说明](docs/nuscenes-data-guide.md) 与 [Foxglove / MCAP 指南](docs/foxglove-mcap-guide.md)。
 
-```bash
-cd Autodrive
-./dakai
-```
+## Troubleshooting
 
-停止服务：
-
-```bash
-./guandiao
-```
-
-如果 `$HOME/Datasets/nuscenes-mini-5gb/v1.0-mini` 已存在，`dakai` 会在缺少 rich 数据时自动生成。
-也可以通过 `NUSCENES_DATAROOT=/path/to/nuscenes-mini ./dakai` 指定本地数据集路径。
-
-生成产物包括：
-
-- `frontend/public/sample.mp4`：真实连续 CAM_FRONT 视频
-- `frontend/public/telemetry.json`：车辆状态
-- `frontend/public/perception.json`：BEV 目标框、车道线、轨迹、地图数据
-- `foxglove/autodrive_nuscenes_mini.mcap`：Foxglove 可播放文件
-
-也可以手动生成：
-
-```bash
-backend/.venv/bin/python scripts/convert_nuscenes_rich.py \
-  --dataroot "$HOME/Datasets/nuscenes-mini-5gb" \
-  --fps 12 \
-  --render-fps 24 \
-  --max-frames 360
-backend/.venv/bin/python scripts/export_foxglove_mcap.py
-```
-
-## 多场景数据集
-
-前端会读取 `frontend/public/scenes.json`，并在顶部“场景”下拉框同步切换视频、telemetry、感知数据和元数据。现有根目录数据已作为 `default` 场景保留，因此旧的单场景部署无需迁移。
-
-将多个 nuScenes 场景导出到独立目录并自动登记到清单：
-
-```bash
-backend/.venv/bin/python scripts/convert_nuscenes_rich.py \
-  --dataroot "$HOME/Datasets/nuscenes-mini-5gb" \
-  --scene scene-0061 \
-  --output-dir frontend/public/scenes/scene-0061 \
-  --manifest frontend/public/scenes.json \
-  --scene-id scene-0061
-```
-
-对每个目标场景重复该命令即可。每个条目必须包含 `sample.mp4`、`telemetry.json`、`perception.json`、`dataset-meta.json`；生成器会以 `id` 为键覆盖同名条目而不会影响其他场景。可选的 `riskEventsFile` 预留给历史风险事件模块使用。
-
-### LiDAR 点云导出与回放
-
-导出场景的视频/感知数据后，可为同一场景生成轻量 LiDAR TOP 关键帧。该命令会更新清单中的
-`lidarIndexFile`，驾驶舱据此同步加载当前关键帧和前两帧历史点云：
-
-```bash
-backend/.venv/bin/python scripts/export_nuscenes_lidar.py \
-  --dataroot "$HOME/Datasets/nuscenes-mini-5gb" \
-  --scene scene-0061 \
-  --perception frontend/public/scenes/scene-0061/perception.json \
-  --manifest frontend/public/scenes.json \
-  --scene-id scene-0061 \
-  --output-dir frontend/public/scenes/scene-0061/lidar
-```
-
-生成路径为 `frontend/public/scenes/<scene-id>/lidar/index.json` 与
-`frames/*.bin`。`index.json` 使用相对帧路径，并在清单中登记为
-`"lidarIndexFile": "/scenes/<scene-id>/lidar/index.json"`。点云为裁剪、下采样后的
-`xyzI float32 little-endian` 数据，目标是每个演示场景保持在约 5 GB 总数据预算内。
-没有该字段的相机场景仍会正常加载视频、地图和诊断；BEV 面板会明确显示“仅相机”，不会沿用上一场景的点云。
-
-API Key 请放在 `backend/.env`，不要提交。后端会读取：
-
-```text
-OPENAI_API_KEY=
-OPENAI_BASE_URL=https://api.deepseek.com
-OPENAI_MODEL=deepseek-chat
-```
-
-没有有效 Key 或模型调用失败时，后端会自动切换本地规则 fallback。
+- **场景为空或视频不播放**：确认先运行了 `./scripts/build_demo_assets.sh`，并检查 `NUSCENES_DATAROOT` 和 `ffmpeg`。
+- **构建器提示缺少 Python**：先执行一次 `./dakai` 创建 `backend/.venv`，再 `./guandiao` 后重试。
+- **端口被占用**：执行 `./guandiao`，再重新运行 `./dakai`。
+- **诊断显示 fallback**：这是无 API Key、网络不可达或模型响应无效时的正常降级；检查 `backend/.env` 与 `http://localhost:8080/health`。

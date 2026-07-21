@@ -2,21 +2,13 @@
 
 一个以真实 nuScenes mini 场景为输入的自动驾驶诊断驾驶舱：前视视频、车辆状态、BEV / 地图、LiDAR 与可追溯的诊断证据在同一时间轴上同步呈现。
 
-## What this demonstrates
+## 核心能力
 
 - 十个中文命名的驾驶场景，可通过鼠标或键盘在入口、实时解析与全域诊断三屏间切换。
 - 同一播放节点驱动前视视频、感知结果、点云、地图轨迹和风险时间线，切屏不重置播放进度或倍速。
 - WebSocket 当前帧诊断与异步全场景报告。报告事实由本地确定性规则生成；可选模型只增强叙事表达。
 
 这是**源码优先**的交付：提交中刻意不包含生成后的场景视频、遥测、感知、LiDAR 帧或 MCAP 大文件。准备本地 nuScenes mini 后，下面的构建脚本会在本机补齐十个场景。
-
-## Demo video
-
-![Autodrive demo cover](docs/assets/autodrive-demo-cover.png)
-
-[Watch the approximately 111-second (about two-minute) release demo](https://github.com/Melon1234123/Autodrive/releases/tag/source-only-v1)
-
-Release 视频只用于展示功能；它不是仓库依赖，也不会被 clone 到本地。
 
 ## Requirements
 
@@ -80,7 +72,7 @@ cp backend/.env.example backend/.env
 
 没有有效 API Key 或服务不可达时，应用仍会以本地 fallback 模式运行。
 
-## Test
+## 工程检查
 
 ```bash
 cd frontend
@@ -107,7 +99,7 @@ npm run test:e2e
 ## Data provenance and limitations
 
 - 场景输入来自你本机持有的 nuScenes mini；视频由 CAM_FRONT 帧生成，感知、轨迹和 LiDAR 回放由仓库脚本转换/裁剪得到。
-- 仓库不随附 nuScenes 原始数据，也不承诺 Release 视频中的生成文件可被下载或复用。
+- 仓库不随附 nuScenes 原始数据或本机构建产生的场景文件。
 - 这是研究与交互演示，不是车辆控制系统、实时感知模型评测或安全认证结论。
 - 根目录的 `docs/` 还保留 [nuScenes 数据说明](docs/nuscenes-data-guide.md) 与 [Foxglove / MCAP 指南](docs/foxglove-mcap-guide.md)。
 

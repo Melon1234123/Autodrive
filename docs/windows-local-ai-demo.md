@@ -92,7 +92,7 @@ Autodrive/
 3. Git
 4. VS Code
 
-验证命令：
+环境检查命令：
 
 ```powershell
 node -v
@@ -120,7 +120,7 @@ frontend/public/sample.mp4
 - 能看到道路、车辆、行人、路口或刹车场景。
 - 文件大小控制在 200 MB 以内，便于仓库外传输和本地调试。
 
-注意：不要把大视频直接提交到 GitHub。仓库里可以只保留说明，视频用网盘或 Releases 管理。
+注意：不要把大视频直接提交到 GitHub；仓库只提交运行所需的源码和小型静态资源。
 
 ### 5.2 车辆状态 JSON
 

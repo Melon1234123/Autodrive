@@ -1,6 +1,6 @@
 # GitHub 源码复现教程
 
-本教程从一个干净的 GitHub clone 开始，在本地生成真实 nuScenes mini 场景并运行 Autodrive。仓库是**源码优先**交付：生成后的场景媒体和数据不在提交中，Release 演示视频也不作为运行依赖。
+本教程从一个干净的 GitHub clone 开始，在本地生成真实 nuScenes mini 场景并运行 Autodrive。仓库采用**源码优先**交付：生成后的场景媒体和数据不在提交中。
 
 ## 1. 获取源码与环境
 
@@ -134,9 +134,8 @@ npm run test:e2e
 
 只有在确认已有服务来自当前工作树时，才使用 `PW_REUSE_EXISTING=1 npm run test:e2e`。
 
-## 7. 数据来源、演示与限制
+## 7. 数据来源与边界
 
-- Release 中的 [约 111 秒（约两分钟）功能演示](https://github.com/Melon1234123/Autodrive/releases/tag/source-only-v1) 是观看入口，不是 clone 后的媒体依赖。
 - 你本机下载的 nuScenes mini 是场景原始输入；仓库脚本把 CAM_FRONT、元数据和 LiDAR 转成前端所需格式。
 - 本项目用于本地研究和可视化演示，不应作为车辆控制、安全认证或真实道路性能结论。
 
